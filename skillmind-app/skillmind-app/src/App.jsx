@@ -88,8 +88,8 @@ const NAP_DURATIONS = [
 
 /* ============================ Supabase storage ============================ */
 
-const SUPABASE_URL = "https://itenhybfheoznyevzyey.supabase.co";
-const SUPABASE_KEY = "sb_publishable_89YONfEmxbg27Efv8nmSfw_luRcAyf7";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://itenhybfheoznyevzyey.supabase.co";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_89YONfEmxbg27Efv8nmSfw_luRcAyf7";
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -101,7 +101,6 @@ async function sb(path, options = {}, attempts = 3) {
         ...options,
         headers: {
           apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
           "Content-Type": "application/json",
           Prefer: options.prefer || "return=representation",
           ...(options.headers || {}),
@@ -117,6 +116,9 @@ async function sb(path, options = {}, attempts = 3) {
       lastErr = err;
       if (i < attempts - 1) await wait(400 * (i + 1));
     }
+  }
+  if (lastErr?.name === "TypeError" || lastErr?.message === "Failed to fetch") {
+    throw new Error("No se pudo conectar con Supabase. Revisa que el proyecto esté activo y que la URL de Supabase sea correcta.");
   }
   throw lastErr;
 }
