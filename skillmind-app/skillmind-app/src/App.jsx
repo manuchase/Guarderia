@@ -88,8 +88,8 @@ const NAP_DURATIONS = [
 
 /* ============================ Supabase storage ============================ */
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://itenhybfheoznyevzyey.supabase.co";
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_89YONfEmxbg27Efv8nmSfw_luRcAyf7";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
