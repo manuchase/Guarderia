@@ -17,17 +17,10 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Solo cacheamos el "cascarón" de la app (HTML/manifest/íconos).
-// Todo lo demás (y sobre todo las llamadas a Supabase) siempre va directo a la red,
-// para que los datos de la guardería nunca se sirvan desde una copia vieja guardada.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   const isShellFile = SHELL_FILES.includes(url.pathname);
-
-  if (event.request.method !== "GET" || url.origin !== self.location.origin || !isShellFile) {
-    return; // deja pasar todo lo demás directo a la red (Supabase, JS, CSS, etc.)
-  }
-
+  if (event.request.method !== "GET" || url.origin !== self.location.origin || !isShellFile) return;
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const fetchPromise = fetch(event.request)
