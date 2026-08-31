@@ -3,7 +3,7 @@ import {
   LogOut, Plus, Copy, Check, X, ArrowLeft, Loader2, Send, Brain, Gamepad2,
   Trash2, Users, Baby, Utensils, Droplet, Moon, Smile, Frown, Meh,
   MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ShieldCheck, FileDown, DoorOpen,
-  Heart, Megaphone, MessageCircle, Home, Search
+  Heart, Megaphone, MessageCircle, Home, Search, Eye, EyeOff, Target
 } from "lucide-react";
 
 /* ============================ helpers ============================ */
@@ -18,6 +18,30 @@ function dayLabel(d) {
   const base = d.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
   return key === todayKey ? `Hoy · ${base}` : base;
 }
+const monthKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+const MONTH_NAMES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+function monthLabel(mk) {
+  const [y, m] = mk.split("-").map(Number);
+  return `${MONTH_NAMES_ES[m - 1]} ${y}`;
+}
+function edadEnMeses(fechaNacimiento) {
+  if (!fechaNacimiento) return null;
+  const nacimiento = new Date(fechaNacimiento + "T00:00:00");
+  const hoy = new Date();
+  let meses = (hoy.getFullYear() - nacimiento.getFullYear()) * 12 + (hoy.getMonth() - nacimiento.getMonth());
+  if (hoy.getDate() < nacimiento.getDate()) meses -= 1;
+  return Math.max(0, meses);
+}
+function formatEdad(fechaNacimiento) {
+  const meses = edadEnMeses(fechaNacimiento);
+  if (meses === null) return "";
+  const anios = Math.floor(meses / 12);
+  const restoMeses = meses % 12;
+  if (anios === 0) return `${restoMeses} ${restoMeses === 1 ? "mes" : "meses"}`;
+  if (restoMeses === 0) return `${anios} ${anios === 1 ? "año" : "años"}`;
+  return `${anios} ${anios === 1 ? "año" : "años"} ${restoMeses} ${restoMeses === 1 ? "mes" : "meses"}`;
+}
+
 function waDigits(telefono) {
   const digits = (telefono || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -111,8 +135,8 @@ async function deleteProfessional(id) {
 /* ---- row <-> object mapping ---- */
 function maestraToRow(m) { return { code: m.code, name: m.name, funcion: m.funcion, grupo: m.grupo, telefono: m.telefono || null, professional_id: m.professionalId, created_at: m.createdAt }; }
 function rowToMaestra(r) { return { code: r.code, name: r.name, funcion: r.funcion, grupo: r.grupo, telefono: r.telefono || "", professionalId: r.professional_id, createdAt: r.created_at }; }
-function ninoToRow(n) { return { id: n.id, name: n.name, grupo: n.grupo, foto: n.foto, professional_id: n.professionalId, created_at: n.createdAt, activo: n.activo !== false }; }
-function rowToNino(r) { return { id: r.id, name: r.name, grupo: r.grupo, foto: r.foto, professionalId: r.professional_id, createdAt: r.created_at, activo: r.activo !== false }; }
+function ninoToRow(n) { return { id: n.id, name: n.name, grupo: n.grupo, foto: n.foto, fecha_nacimiento: n.fechaNacimiento || null, professional_id: n.professionalId, created_at: n.createdAt, activo: n.activo !== false }; }
+function rowToNino(r) { return { id: r.id, name: r.name, grupo: r.grupo, foto: r.foto, fechaNacimiento: r.fecha_nacimiento || "", professionalId: r.professional_id, createdAt: r.created_at, activo: r.activo !== false }; }
 function logToRow(log) { return { id: `${log.ninoId}:${log.date}`, nino_id: log.ninoId, nino_name: log.ninoName, grupo: log.grupo, date: log.date, professional_id: log.professionalId, alimentacion: log.alimentacion, panales: log.panales, siestas: log.siestas, animos: log.animos, notas: log.notas }; }
 function rowToLog(r) { return { ninoId: r.nino_id, ninoName: r.nino_name, grupo: r.grupo, date: r.date, professionalId: r.professional_id, alimentacion: r.alimentacion || [], panales: r.panales || [], siestas: r.siestas || [], animos: r.animos || [], notas: r.notas || [] }; }
 
@@ -165,6 +189,143 @@ async function listNinoIdsWithLogOn(profId, date) {
     const rows = await sb(`bitacoras?professional_id=eq.${encodeURIComponent(profId)}&date=eq.${encodeURIComponent(date)}&select=nino_id`);
     return new Set((rows || []).map((r) => r.nino_id));
   } catch { return new Set(); }
+}
+
+/* ================================ módulo PLAN ============================= */
+
+const AREAS = [
+  { key: "motricidad", label: "Motricidad" },
+  { key: "lenguaje", label: "Lenguaje y comunicación" },
+  { key: "cognicion", label: "Cognición" },
+  { key: "socioemocional", label: "Desarrollo socioemocional" },
+  { key: "autonomia", label: "Autonomía" },
+];
+const ESTADOS_OBJETIVO = [
+  { key: "no_iniciado", label: "No iniciado", color: "#7A8A85", bg: "#F1F2F0" },
+  { key: "en_proceso", label: "En proceso", color: "#C99A2E", bg: "#FFFDF0" },
+  { key: "logrado", label: "Logrado", color: "#5FA34A", bg: "#F2F9EF" },
+];
+
+// Biblioteca orientativa de objetivos por edad. Son sugerencias generales de
+// desarrollo, no diagnósticos ni requisitos — cada niño avanza a su propio ritmo.
+const OBJETIVOS_LIBRARY = [
+  {
+    minMeses: 0, maxMeses: 11, etapa: "0 a 11 meses",
+    objetivos: [
+      { area: "motricidad", texto: "Sostener la cabeza y girar sobre sí mismo/a" },
+      { area: "motricidad", texto: "Sentarse sin apoyo" },
+      { area: "lenguaje", texto: "Balbucear y responder a sonidos familiares" },
+      { area: "cognicion", texto: "Seguir objetos con la mirada y buscar objetos escondidos" },
+      { area: "socioemocional", texto: "Sonreír y reconocer caras conocidas" },
+      { area: "autonomia", texto: "Llevarse objetos a la boca para explorar" },
+    ],
+  },
+  {
+    minMeses: 12, maxMeses: 23, etapa: "1 a 2 años",
+    objetivos: [
+      { area: "motricidad", texto: "Caminar de forma independiente" },
+      { area: "motricidad", texto: "Subir escalones con ayuda" },
+      { area: "lenguaje", texto: "Decir algunas palabras sueltas con intención" },
+      { area: "cognicion", texto: "Apilar bloques o encajar piezas simples" },
+      { area: "socioemocional", texto: "Mostrar interés por jugar cerca de otros niños" },
+      { area: "autonomia", texto: "Intentar comer solo/a con cuchara" },
+    ],
+  },
+  {
+    minMeses: 24, maxMeses: 35, etapa: "2 a 3 años",
+    objetivos: [
+      { area: "motricidad", texto: "Correr y patear una pelota con control" },
+      { area: "lenguaje", texto: "Formar frases cortas de 2-3 palabras" },
+      { area: "cognicion", texto: "Reconocer colores básicos" },
+      { area: "socioemocional", texto: "Participar en juego paralelo con otros niños" },
+      { area: "autonomia", texto: "Avisar para ir al baño" },
+      { area: "autonomia", texto: "Lavarse las manos con ayuda mínima" },
+    ],
+  },
+  {
+    minMeses: 36, maxMeses: 47, etapa: "3 a 4 años",
+    objetivos: [
+      { area: "motricidad", texto: "Saltar con ambos pies y mantener el equilibrio breve" },
+      { area: "lenguaje", texto: "Contar experiencias sencillas en oraciones completas" },
+      { area: "cognicion", texto: "Clasificar objetos por tamaño o forma" },
+      { area: "socioemocional", texto: "Compartir juguetes y esperar turnos con apoyo" },
+      { area: "autonomia", texto: "Vestirse con prendas sencillas de forma independiente" },
+    ],
+  },
+  {
+    minMeses: 48, maxMeses: 59, etapa: "4 a 5 años",
+    objetivos: [
+      { area: "motricidad", texto: "Recortar con tijeras siguiendo una línea" },
+      { area: "lenguaje", texto: "Narrar una historia corta con inicio y final" },
+      { area: "cognicion", texto: "Reconocer letras de su nombre" },
+      { area: "socioemocional", texto: "Resolver pequeños conflictos con palabras" },
+      { area: "autonomia", texto: "Guardar sus pertenencias sin recordatorio" },
+    ],
+  },
+  {
+    minMeses: 60, maxMeses: 999, etapa: "5 a 6 años",
+    objetivos: [
+      { area: "motricidad", texto: "Escribir su nombre" },
+      { area: "lenguaje", texto: "Seguir instrucciones de varios pasos" },
+      { area: "cognicion", texto: "Reconocer números y contar hasta 10" },
+      { area: "socioemocional", texto: "Trabajar en equipo en actividades grupales" },
+      { area: "autonomia", texto: "Organizar su mochila o materiales antes de salir" },
+    ],
+  },
+];
+function objetivosParaEdad(meses) {
+  if (meses === null) return [];
+  const etapa = OBJETIVOS_LIBRARY.find((e) => meses >= e.minMeses && meses <= e.maxMeses);
+  return etapa ? etapa.objetivos : [];
+}
+
+/* ---- row <-> object mapping ---- */
+function planToRow(p) { return { id: p.id, nino_id: p.ninoId, professional_id: p.professionalId, mes: p.mes, maestra_code: p.maestraCode, edad_meses: p.edadMeses, estado: p.estado, created_at: p.createdAt, closed_at: p.closedAt || null, resumen: p.resumen || null }; }
+function rowToPlan(r) { return { id: r.id, ninoId: r.nino_id, professionalId: r.professional_id, mes: r.mes, maestraCode: r.maestra_code, edadMeses: r.edad_meses, estado: r.estado, createdAt: r.created_at, closedAt: r.closed_at, resumen: r.resumen }; }
+function objetivoToRow(o) { return { id: o.id, plan_id: o.planId, origen: o.origen, area: o.area, texto: o.texto, es_principal: !!o.esPrincipal, nivel_inicial: o.nivelInicial || "", meta_esperada: o.metaEsperada || "", progreso: o.progreso || 0, estado: o.estado, observaciones: o.observaciones || "", visible_padres: !!o.visiblePadres, updated_at: o.updatedAt }; }
+function rowToObjetivo(r) { return { id: r.id, planId: r.plan_id, origen: r.origen, area: r.area, texto: r.texto, esPrincipal: !!r.es_principal, nivelInicial: r.nivel_inicial || "", metaEsperada: r.meta_esperada || "", progreso: r.progreso || 0, estado: r.estado, observaciones: r.observaciones || "", visiblePadres: !!r.visible_padres, updatedAt: r.updated_at }; }
+function registroToRow(r) { return { id: r.id, objetivo_id: r.objetivoId, fecha: r.fecha, progreso: r.progreso, observacion: r.observacion || "", usuario: r.usuario, created_at: r.createdAt }; }
+function rowToRegistro(r) { return { id: r.id, objetivoId: r.objetivo_id, fecha: r.fecha, progreso: r.progreso, observacion: r.observacion || "", usuario: r.usuario, createdAt: r.created_at }; }
+
+/* ---- planes ---- */
+async function listPlanesByNino(ninoId) {
+  const rows = await sb(`planes?nino_id=eq.${encodeURIComponent(ninoId)}&order=mes.desc`);
+  return (rows || []).map(rowToPlan);
+}
+async function savePlan(p) {
+  await sb("planes", { method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: JSON.stringify([planToRow(p)]) });
+}
+async function getOrCreatePlanDelMes(nino, professionalId, maestraCode) {
+  const mk = monthKey(new Date());
+  const id = `${nino.id}:${mk}`;
+  try {
+    const rows = await sb(`planes?id=eq.${encodeURIComponent(id)}`);
+    if (rows && rows[0]) return rowToPlan(rows[0]);
+  } catch {}
+  const nuevo = { id, ninoId: nino.id, professionalId, mes: mk, maestraCode, edadMeses: edadEnMeses(nino.fechaNacimiento), estado: "abierto", createdAt: Date.now(), closedAt: null, resumen: null };
+  await savePlan(nuevo);
+  return nuevo;
+}
+
+/* ---- objetivos ---- */
+async function listObjetivos(planId) {
+  const rows = await sb(`plan_objetivos?plan_id=eq.${encodeURIComponent(planId)}&order=id`);
+  return (rows || []).map(rowToObjetivo);
+}
+async function saveObjetivo(o) {
+  await sb("plan_objetivos", { method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: JSON.stringify([objetivoToRow(o)]) });
+}
+async function deleteObjetivo(id) {
+  try { await sb(`plan_objetivos?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" }); } catch {}
+}
+
+/* ---- registros de avance ---- */
+async function listRegistros(objetivoId) {
+  const rows = await sb(`plan_registros?objetivo_id=eq.${encodeURIComponent(objetivoId)}&order=created_at.desc`);
+  return (rows || []).map(rowToRegistro);
+}
+async function saveRegistro(r) {
+  await sb("plan_registros", { method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: JSON.stringify([registroToRow(r)]) });
 }
 
 /* ---- padres ---- */
@@ -1273,11 +1434,12 @@ function resizeImageFile(file, maxSize = 300, quality = 0.75) {
   });
 }
 
-function NinoRow({ n, grupoOptions, onSaved, onArchiveToggle }) {
+function NinoRow({ n, grupoOptions, onSaved, onArchiveToggle, onViewPlan }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(n.name);
   const [grupo, setGrupo] = useState(n.grupo);
   const [foto, setFoto] = useState(n.foto || "");
+  const [fechaNacimiento, setFechaNacimiento] = useState(n.fechaNacimiento || "");
   const [processingPhoto, setProcessingPhoto] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1296,7 +1458,7 @@ function NinoRow({ n, grupoOptions, onSaved, onArchiveToggle }) {
     setError("");
     if (!name.trim() || !grupo.trim()) { setError("El nombre y el grupo son obligatorios."); return; }
     setSaving(true);
-    const updated = { ...n, name: name.trim(), grupo: grupo.trim(), foto: foto.trim() };
+    const updated = { ...n, name: name.trim(), grupo: grupo.trim(), foto: foto.trim(), fechaNacimiento };
     try { await saveNino(updated); onSaved(updated); setOpen(false); }
     catch (err) { setError("No se pudo guardar: " + (err?.message || "intenta de nuevo")); }
     setSaving(false);
@@ -1311,7 +1473,7 @@ function NinoRow({ n, grupoOptions, onSaved, onArchiveToggle }) {
           </div>
           <div className="min-w-0">
             <p className="text-sm font-medium truncate" style={{ color: "#2E3A36" }}>{n.name} {n.activo === false && <span className="text-xs font-normal">(archivado)</span>}</p>
-            <p className="text-xs" style={{ color: "#7A8A85" }}>{n.grupo}</p>
+            <p className="text-xs" style={{ color: "#7A8A85" }}>{n.grupo}{n.fechaNacimiento ? ` · ${formatEdad(n.fechaNacimiento)}` : ""}</p>
           </div>
         </div>
         <ChevronDown size={15} color="#C7D9D4" className="shrink-0 transition-transform" style={{ transform: open ? "rotate(180deg)" : "none" }} />
@@ -1330,7 +1492,14 @@ function NinoRow({ n, grupoOptions, onSaved, onArchiveToggle }) {
           <input className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} placeholder="Nombre" value={name} onChange={(e) => setName(e.target.value)} />
           <input className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" list="grupos-list-edit" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} placeholder="Grupo" value={grupo} onChange={(e) => setGrupo(e.target.value)} />
           <datalist id="grupos-list-edit">{grupoOptions.map((g) => <option key={g} value={g} />)}</datalist>
+          <div>
+            <label className="text-xs font-medium mb-1 block" style={{ color: "#4A9483" }}>Fecha de nacimiento (para el módulo Plan)</label>
+            <input type="date" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} />
+          </div>
           {error && <p className="text-xs" style={{ color: "#D9584F" }}>{error}</p>}
+          <button onClick={() => onViewPlan(n)} className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-medium" style={{ background: "rgba(95,179,161,0.08)", color: "#4A9483" }}>
+            <Target size={13} /> Ver plan de desarrollo
+          </button>
           <div className="flex gap-2">
             <GlassButton variant="secondary" className="flex-1" onClick={save} disabled={saving}>{saving ? <Loader2 className="animate-spin" size={14} /> : <Check size={14} />} Guardar</GlassButton>
             <button onClick={() => onArchiveToggle(n)} className="flex-1 rounded-full text-xs font-medium" style={n.activo === false ? { background: "rgba(95,179,161,0.1)", color: "#4A9483" } : { background: "rgba(217,88,79,0.08)", color: "#D9584F" }}>
@@ -1347,11 +1516,22 @@ function NinosTab({ pro, ninos, maestras, loading, onAdded, onSavedNino, showToa
   const [name, setName] = useState("");
   const [grupo, setGrupo] = useState("");
   const [foto, setFoto] = useState("");
+  const [fechaNacimiento, setFechaNacimiento] = useState("");
   const [processingPhoto, setProcessingPhoto] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [planNino, setPlanNino] = useState(null);
+
+  if (planNino) {
+    return (
+      <div className="space-y-3">
+        <button onClick={() => setPlanNino(null)} className="text-sm flex items-center gap-1.5" style={{ color: "#7A8A85" }}><ArrowLeft size={14} /> Todos los niños</button>
+        <PlanView nino={planNino} professionalId={pro.id} mode="coordinadora" showToast={showToast} />
+      </div>
+    );
+  }
 
   async function handlePhotoUpload(e) {
     const file = e.target.files?.[0];
@@ -1369,11 +1549,11 @@ function NinosTab({ pro, ninos, maestras, loading, onAdded, onSavedNino, showToa
     setFormError("");
     if (!name.trim() || !grupo.trim()) { setFormError("Falta el nombre o el grupo — ambos son obligatorios."); return; }
     setSaving(true);
-    const n = { id: "n" + Date.now() + Math.random().toString(36).slice(2, 5), name: name.trim(), grupo: grupo.trim(), foto: foto.trim(), professionalId: pro.id, createdAt: Date.now(), activo: true };
+    const n = { id: "n" + Date.now() + Math.random().toString(36).slice(2, 5), name: name.trim(), grupo: grupo.trim(), foto: foto.trim(), fechaNacimiento, professionalId: pro.id, createdAt: Date.now(), activo: true };
     try {
       await saveNino(n);
       onAdded(n);
-      setName(""); setGrupo(""); setFoto("");
+      setName(""); setGrupo(""); setFoto(""); setFechaNacimiento("");
       showToast("Niño agregado");
     } catch (err) { setFormError("No se pudo guardar: " + (err?.message || "intenta de nuevo")); }
     setSaving(false);
@@ -1396,6 +1576,10 @@ function NinosTab({ pro, ninos, maestras, loading, onAdded, onSavedNino, showToa
         <h2 className="font-semibold" style={{ color: "#2E3A36" }}>Nuevo niño</h2>
         <input className="w-full px-4 py-3 rounded-2xl text-sm outline-none" style={{ background: "rgba(255,255,255,0.7)", border: "1px solid rgba(95,179,161,0.2)" }} placeholder="Nombre" value={name} onChange={(e) => setName(e.target.value)} />
         <input className="w-full px-4 py-3 rounded-2xl text-sm outline-none" list="grupos-list" style={{ background: "rgba(255,255,255,0.7)", border: "1px solid rgba(95,179,161,0.2)" }} placeholder="Grupo (ej. Maternal)" value={grupo} onChange={(e) => setGrupo(e.target.value)} />
+        <div>
+          <label className="text-xs font-medium mb-1 block" style={{ color: "#4A9483" }}>Fecha de nacimiento (para el módulo Plan)</label>
+          <input type="date" className="w-full px-4 py-3 rounded-2xl text-sm outline-none" style={{ background: "rgba(255,255,255,0.7)", border: "1px solid rgba(95,179,161,0.2)" }} value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} />
+        </div>
         <datalist id="grupos-list">{grupoOptions.map((g) => <option key={g} value={g} />)}</datalist>
         <div className="flex items-center gap-3">
           <div className="w-14 h-14 rounded-2xl overflow-hidden flex items-center justify-center shrink-0" style={{ background: "rgba(232,185,61,0.12)" }}>
@@ -1429,7 +1613,7 @@ function NinosTab({ pro, ninos, maestras, loading, onAdded, onSavedNino, showToa
         <div className="px-3 py-3 space-y-2">
           {loading && <p className="text-sm text-center py-6" style={{ color: "#7A8A85" }}>Cargando…</p>}
           {!loading && visible.length === 0 && <p className="text-sm text-center py-8" style={{ color: "#7A8A85" }}>{q ? "Sin resultados." : "Aún no hay niños registrados."}</p>}
-          {visible.map((n) => <NinoRow key={n.id} n={n} grupoOptions={grupoOptions} onSaved={onSavedNino} onArchiveToggle={archiveToggle} />)}
+          {visible.map((n) => <NinoRow key={n.id} n={n} grupoOptions={grupoOptions} onSaved={onSavedNino} onArchiveToggle={archiveToggle} onViewPlan={setPlanNino} />)}
         </div>
       </GlassCard>
     </div>
@@ -1773,6 +1957,328 @@ function BitacorasAdminTab({ maestras, ninos, loading, copyLink, linkUrl, onPrev
   );
 }
 
+/* ------------------------------ Módulo PLAN (UI) --------------------------- */
+
+function ObjetivoCard({ objetivo, onUpdate, onDelete, readOnly, hideHiddenObs }) {
+  const [open, setOpen] = useState(false);
+  const [progreso, setProgreso] = useState(objetivo.progreso);
+  const [estado, setEstado] = useState(objetivo.estado);
+  const [observaciones, setObservaciones] = useState(objetivo.observaciones);
+  const [visiblePadres, setVisiblePadres] = useState(objetivo.visiblePadres);
+  const [registros, setRegistros] = useState([]);
+  const [loadingRegs, setLoadingRegs] = useState(false);
+  const [showAddReg, setShowAddReg] = useState(false);
+  const [regProgreso, setRegProgreso] = useState(objetivo.progreso);
+  const [regObs, setRegObs] = useState("");
+  const [savingReg, setSavingReg] = useState(false);
+
+  const st = ESTADOS_OBJETIVO.find((e) => e.key === estado) || ESTADOS_OBJETIVO[0];
+
+  async function loadRegistros() {
+    setLoadingRegs(true);
+    const r = await listRegistros(objetivo.id);
+    setRegistros(r);
+    setLoadingRegs(false);
+  }
+  function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (next) loadRegistros();
+  }
+
+  async function saveChanges(patch) {
+    const updated = { ...objetivo, progreso, estado, observaciones, visiblePadres, ...patch, updatedAt: Date.now() };
+    try { await saveObjetivo(updated); onUpdate(updated); } catch {}
+  }
+
+  async function addRegistro() {
+    setSavingReg(true);
+    const reg = { id: `${objetivo.id}:${Date.now()}`, objetivoId: objetivo.id, fecha: dateKey(new Date()), progreso: regProgreso, observacion: regObs.trim(), usuario: "Maestra", createdAt: Date.now() };
+    try {
+      await saveRegistro(reg);
+      setRegistros((prev) => [reg, ...prev]);
+      setProgreso(regProgreso);
+      await saveChanges({ progreso: regProgreso });
+      setRegObs(""); setShowAddReg(false);
+    } catch {}
+    setSavingReg(false);
+  }
+
+  const mostrarObs = !hideHiddenObs || objetivo.visiblePadres;
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.6)" }}>
+      <button onClick={toggleOpen} className="w-full flex items-center justify-between gap-3 p-3.5 text-left">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {objetivo.esPrincipal && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style={{ background: "rgba(95,179,161,0.15)", color: "#4A9483" }}>Principal</span>}
+            <p className="text-sm font-medium" style={{ color: "#2E3A36" }}>{objetivo.texto}</p>
+          </div>
+          <p className="text-xs mt-0.5" style={{ color: "#7A8A85" }}>{AREAS.find((a) => a.key === objetivo.area)?.label}</p>
+          <div className="w-full h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: "rgba(0,0,0,0.06)" }}>
+            <div className="h-full rounded-full" style={{ width: `${progreso}%`, background: st.color }} />
+          </div>
+        </div>
+        <span className="text-xs px-2 py-1 rounded-full font-medium shrink-0" style={{ background: st.bg, color: st.color }}>{st.label}</span>
+      </button>
+      {open && (
+        <div className="px-3.5 pb-3.5 space-y-3" style={{ borderTop: "1px solid rgba(95,179,161,0.1)" }}>
+          {!readOnly && (
+            <div className="pt-3 space-y-2.5">
+              <div>
+                <label className="text-xs font-medium mb-1 block" style={{ color: "#4A9483" }}>Progreso: {progreso}%</label>
+                <input type="range" min="0" max="100" step="5" value={progreso} className="w-full"
+                  onChange={(e) => setProgreso(Number(e.target.value))}
+                  onMouseUp={() => saveChanges({ progreso })} onTouchEnd={() => saveChanges({ progreso })} />
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {ESTADOS_OBJETIVO.map((e) => (
+                  <button key={e.key} onClick={() => { setEstado(e.key); saveChanges({ estado: e.key }); }} className="py-2 rounded-xl text-xs font-medium"
+                    style={estado === e.key ? { background: e.color, color: "white" } : { background: e.bg, color: e.color }}>
+                    {e.label}
+                  </button>
+                ))}
+              </div>
+              <textarea className="w-full px-3 py-2 rounded-xl text-sm outline-none resize-none" rows={2} placeholder="Observaciones internas…"
+                style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }}
+                value={observaciones} onChange={(e) => setObservaciones(e.target.value)} onBlur={() => saveChanges({ observaciones })} />
+              <button onClick={() => { const v = !visiblePadres; setVisiblePadres(v); saveChanges({ visiblePadres: v }); }} className="text-xs font-medium flex items-center gap-1.5" style={{ color: visiblePadres ? "#4A9483" : "#7A8A85" }}>
+                {visiblePadres ? <Eye size={13} /> : <EyeOff size={13} />} {visiblePadres ? "Visible para padres" : "Solo personal autorizado"}
+              </button>
+              {registros.length === 0 && (
+                <button onClick={() => onDelete(objetivo.id)} className="text-xs font-medium" style={{ color: "#D9584F" }}>Eliminar esta meta</button>
+              )}
+            </div>
+          )}
+          {readOnly && mostrarObs && objetivo.observaciones && (
+            <p className="text-sm pt-3" style={{ color: "#2E3A36" }}>{objetivo.observaciones}</p>
+          )}
+
+          <div className="pt-2">
+            <p className="text-xs font-medium mb-1.5" style={{ color: "#4A9483" }}>Historial de avances</p>
+            {loadingRegs && <p className="text-xs" style={{ color: "#7A8A85" }}>Cargando…</p>}
+            {!loadingRegs && registros.length === 0 && <p className="text-xs" style={{ color: "#BFD9D1" }}>Sin registros aún.</p>}
+            {registros.map((r) => (
+              <div key={r.id} className="text-xs p-2 rounded-lg mb-1" style={{ background: "rgba(255,255,255,0.5)" }}>
+                <span style={{ color: "#2E3A36" }}>{r.fecha} · {r.progreso}%</span>
+                {r.observacion && mostrarObs && <p style={{ color: "#7A8A85" }}>{r.observacion}</p>}
+              </div>
+            ))}
+            {!readOnly && (
+              showAddReg ? (
+                <div className="space-y-2 mt-2">
+                  <input type="range" min="0" max="100" step="5" value={regProgreso} onChange={(e) => setRegProgreso(Number(e.target.value))} className="w-full" />
+                  <p className="text-xs text-center" style={{ color: "#7A8A85" }}>{regProgreso}%</p>
+                  <textarea className="w-full px-3 py-2 rounded-xl text-sm outline-none resize-none" rows={2} placeholder="Observación de este avance…"
+                    style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} value={regObs} onChange={(e) => setRegObs(e.target.value)} />
+                  <div className="flex gap-2">
+                    <GlassButton variant="secondary" className="flex-1" onClick={addRegistro} disabled={savingReg}>{savingReg ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />} Guardar avance</GlassButton>
+                    <button onClick={() => setShowAddReg(false)} className="px-3 text-xs" style={{ color: "#7A8A85" }}>Cancelar</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setShowAddReg(true)} className="text-xs font-medium mt-2" style={{ color: "#4A9483" }}>+ Registrar avance</button>
+              )
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AddObjetivoPanel({ plan, existingTextos, onAdded, showToast }) {
+  const [open, setOpen] = useState(false);
+  const [customText, setCustomText] = useState("");
+  const [customArea, setCustomArea] = useState(AREAS[0].key);
+  const [adding, setAdding] = useState(null);
+
+  const sugeridos = objetivosParaEdad(plan.edadMeses).filter((o) => !existingTextos.includes(o.texto));
+
+  async function addFromLibrary(o) {
+    setAdding(o.texto);
+    const obj = { id: `${plan.id}:${Date.now()}${Math.random().toString(36).slice(2, 5)}`, planId: plan.id, origen: "biblioteca", area: o.area, texto: o.texto, esPrincipal: false, nivelInicial: "", metaEsperada: "", progreso: 0, estado: "no_iniciado", observaciones: "", visiblePadres: false, updatedAt: Date.now() };
+    try { await saveObjetivo(obj); onAdded(obj); } catch { showToast("No se pudo agregar"); }
+    setAdding(null);
+  }
+
+  async function addCustom() {
+    if (!customText.trim()) return;
+    setAdding("custom");
+    const obj = { id: `${plan.id}:${Date.now()}${Math.random().toString(36).slice(2, 5)}`, planId: plan.id, origen: "personalizada", area: customArea, texto: customText.trim(), esPrincipal: false, nivelInicial: "", metaEsperada: "", progreso: 0, estado: "no_iniciado", observaciones: "", visiblePadres: false, updatedAt: Date.now() };
+    try { await saveObjetivo(obj); onAdded(obj); setCustomText(""); } catch { showToast("No se pudo agregar"); }
+    setAdding(null);
+  }
+
+  return (
+    <GlassCard className="p-4">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between">
+        <p className="text-sm font-semibold" style={{ color: "#2E3A36" }}>+ Agregar meta</p>
+        <ChevronDown size={15} color="#C7D9D4" className="transition-transform" style={{ transform: open ? "rotate(180deg)" : "none" }} />
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3">
+          {sugeridos.length > 0 && (
+            <div>
+              <p className="text-xs font-medium mb-1.5" style={{ color: "#4A9483" }}>Sugeridos para su edad</p>
+              <div className="space-y-1.5">
+                {sugeridos.map((o, i) => (
+                  <button key={i} disabled={adding === o.texto} onClick={() => addFromLibrary(o)} className="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl text-left text-sm" style={{ background: "rgba(95,179,161,0.06)" }}>
+                    <span style={{ color: "#2E3A36" }}>{o.texto}<span className="block text-xs" style={{ color: "#7A8A85" }}>{AREAS.find((a) => a.key === o.area)?.label}</span></span>
+                    <Plus size={14} color="#4A9483" className="shrink-0" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <p className="text-xs font-medium mb-1.5" style={{ color: "#4A9483" }}>Meta personalizada</p>
+            <textarea className="w-full px-3 py-2 rounded-xl text-sm outline-none resize-none" rows={2} placeholder="Escribe una meta…" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} value={customText} onChange={(e) => setCustomText(e.target.value)} />
+            <select className="w-full mt-2 px-3 py-2.5 rounded-xl text-sm outline-none" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} value={customArea} onChange={(e) => setCustomArea(e.target.value)}>
+              {AREAS.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
+            </select>
+            <GlassButton variant="secondary" className="w-full mt-2" onClick={addCustom} disabled={adding === "custom"}>{adding === "custom" ? <Loader2 className="animate-spin" size={14} /> : <Plus size={14} />} Agregar</GlassButton>
+          </div>
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
+function PlanView({ nino, maestraCode, professionalId, mode, showToast }) {
+  const [planes, setPlanes] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [objetivos, setObjetivos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingObjs, setLoadingObjs] = useState(true);
+  const [closing, setClosing] = useState(false);
+  const [obsFinales, setObsFinales] = useState("");
+  const [showCloseForm, setShowCloseForm] = useState(false);
+
+  const reloadPlanes = useCallback(async () => {
+    setLoading(true);
+    let list = await listPlanesByNino(nino.id);
+    if (mode === "maestra") {
+      const mk = monthKey(new Date());
+      if (!list.some((p) => p.mes === mk)) {
+        const nuevo = await getOrCreatePlanDelMes(nino, professionalId, maestraCode);
+        list = [nuevo, ...list];
+      }
+    }
+    if (mode === "padre") {
+      const mk = monthKey(new Date());
+      list = list.filter((p) => p.mes === mk || p.estado === "cerrado");
+    }
+    setPlanes(list);
+    setSelectedId((prev) => (prev && list.some((p) => p.id === prev) ? prev : list[0]?.id || null));
+    setLoading(false);
+  }, [nino.id, mode, professionalId, maestraCode]);
+
+  useEffect(() => { reloadPlanes(); }, [reloadPlanes]);
+
+  useEffect(() => {
+    if (!selectedId) { setObjetivos([]); setLoadingObjs(false); return; }
+    setLoadingObjs(true);
+    listObjetivos(selectedId).then((list) => { setObjetivos(list); setLoadingObjs(false); });
+  }, [selectedId]);
+
+  function updateObjetivoLocal(o) { setObjetivos((prev) => prev.map((x) => (x.id === o.id ? o : x))); }
+  function addObjetivoLocal(o) { setObjetivos((prev) => [...prev, o]); }
+  async function removeObjetivo(id) { setObjetivos((prev) => prev.filter((x) => x.id !== id)); await deleteObjetivo(id); }
+
+  const selectedPlan = planes.find((p) => p.id === selectedId);
+  const isCurrentOpen = selectedPlan && selectedPlan.estado === "abierto";
+
+  async function closeMonth() {
+    setClosing(true);
+    const counts = { logrado: 0, en_proceso: 0, no_iniciado: 0 };
+    let sumaProgreso = 0;
+    objetivos.forEach((o) => { counts[o.estado] = (counts[o.estado] || 0) + 1; sumaProgreso += o.progreso; });
+    const resumen = { logrados: counts.logrado || 0, enProceso: counts.en_proceso || 0, noIniciados: counts.no_iniciado || 0, porcentajePromedio: objetivos.length ? Math.round(sumaProgreso / objetivos.length) : 0, observacionesFinales: obsFinales.trim() };
+    const updated = { ...selectedPlan, estado: "cerrado", closedAt: Date.now(), resumen };
+    try { await savePlan(updated); setPlanes((prev) => prev.map((p) => (p.id === updated.id ? updated : p))); setShowCloseForm(false); showToast && showToast("Mes cerrado"); }
+    catch { showToast && showToast("No se pudo cerrar el mes"); }
+    setClosing(false);
+  }
+
+  if (loading) return <GlassCard className="p-6"><p className="text-sm" style={{ color: "#7A8A85" }}>Cargando plan…</p></GlassCard>;
+
+  const existingTextos = objetivos.map((o) => o.texto);
+  const counts = { logrado: 0, en_proceso: 0, no_iniciado: 0 };
+  objetivos.forEach((o) => { counts[o.estado] = (counts[o.estado] || 0) + 1; });
+  const promedio = objetivos.length ? Math.round(objetivos.reduce((s, o) => s + o.progreso, 0) / objetivos.length) : 0;
+
+  return (
+    <div className="space-y-3">
+      <GlassCard className="p-4">
+        <div className="flex items-center justify-between mb-1">
+          <p className="font-semibold" style={{ color: "#2E3A36" }}>{nino.name}</p>
+          {nino.fechaNacimiento ? <span className="text-xs" style={{ color: "#7A8A85" }}>{formatEdad(nino.fechaNacimiento)}</span> : <span className="text-xs" style={{ color: "#D9584F" }}>Falta fecha de nacimiento</span>}
+        </div>
+        <p className="text-xs" style={{ color: "#7A8A85" }}>{nino.grupo}</p>
+      </GlassCard>
+
+      {planes.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>Aún no hay planes para este niño.</p></GlassCard>}
+
+      {planes.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {planes.map((p) => (
+            <button key={p.id} onClick={() => setSelectedId(p.id)} className="shrink-0 px-3.5 py-2 rounded-full text-xs font-medium"
+              style={selectedId === p.id ? { background: "#5FB3A1", color: "white" } : { background: "#FFFFFF", color: "#7A8A85", border: "1px solid rgba(46,58,54,0.08)" }}>
+              {monthLabel(p.mes)}{p.estado === "cerrado" ? " ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selectedPlan && (
+        <>
+          <GlassCard className="p-4">
+            <p className="text-xs font-medium mb-2" style={{ color: "#4A9483" }}>PLAN DE {monthLabel(selectedPlan.mes).toUpperCase()}</p>
+            <div className="flex items-center gap-3 text-xs mb-2 flex-wrap">
+              <span style={{ color: "#5FA34A" }}>● Logrado: {counts.logrado || 0}</span>
+              <span style={{ color: "#C99A2E" }}>● En proceso: {counts.en_proceso || 0}</span>
+              <span style={{ color: "#7A8A85" }}>● No iniciado: {counts.no_iniciado || 0}</span>
+            </div>
+            <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: "rgba(0,0,0,0.06)" }}>
+              <div className="h-full rounded-full" style={{ width: `${promedio}%`, background: "#5FB3A1" }} />
+            </div>
+            <p className="text-xs mt-1" style={{ color: "#7A8A85" }}>{promedio}% de progreso general</p>
+            {selectedPlan.estado === "cerrado" && selectedPlan.resumen?.observacionesFinales && (
+              <p className="text-sm mt-3 pt-3" style={{ color: "#2E3A36", borderTop: "1px solid rgba(95,179,161,0.1)" }}>{selectedPlan.resumen.observacionesFinales}</p>
+            )}
+          </GlassCard>
+
+          {loadingObjs && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>Cargando metas…</p></GlassCard>}
+          {!loadingObjs && objetivos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>Aún no hay metas en este plan.</p></GlassCard>}
+          {!loadingObjs && objetivos.map((o) => (
+            <ObjetivoCard key={o.id} objetivo={o} onUpdate={updateObjetivoLocal} onDelete={removeObjetivo} readOnly={mode !== "maestra"} hideHiddenObs={mode === "padre"} />
+          ))}
+
+          {mode === "maestra" && isCurrentOpen && !loadingObjs && (
+            <AddObjetivoPanel plan={selectedPlan} existingTextos={existingTextos} onAdded={addObjetivoLocal} showToast={showToast || (() => {})} />
+          )}
+
+          {mode === "maestra" && isCurrentOpen && objetivos.length > 0 && (
+            showCloseForm ? (
+              <GlassCard className="p-4 space-y-2.5">
+                <p className="text-sm font-semibold" style={{ color: "#2E3A36" }}>Cerrar el mes</p>
+                <textarea className="w-full px-3 py-2 rounded-xl text-sm outline-none resize-none" rows={3} placeholder="Observaciones finales del mes…" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(95,179,161,0.2)" }} value={obsFinales} onChange={(e) => setObsFinales(e.target.value)} />
+                <div className="flex gap-2">
+                  <GlassButton className="flex-1" onClick={closeMonth} disabled={closing}>{closing ? <Loader2 className="animate-spin" size={14} /> : <Check size={14} />} Confirmar cierre</GlassButton>
+                  <button onClick={() => setShowCloseForm(false)} className="px-3 text-xs" style={{ color: "#7A8A85" }}>Cancelar</button>
+                </div>
+              </GlassCard>
+            ) : (
+              <GlassButton variant="secondary" className="w-full" onClick={() => setShowCloseForm(true)}>Cerrar mes</GlassButton>
+            )
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------ Maestra hub (link) --------------------------- */
 
 function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
@@ -1781,6 +2287,8 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
   const [loading, setLoading] = useState(true);
   const [date, setDate] = useState(dateKey(new Date()));
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [modo, setModo] = useState("bitacoras"); // "bitacoras" | "plan"
+  const [ninoPlan, setNinoPlan] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -1824,6 +2332,15 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
     );
   }
 
+  if (ninoPlan) {
+    return (
+      <div className="w-full max-w-md px-5 pt-8 pb-16 flex-1">
+        <button onClick={() => setNinoPlan(null)} className="text-sm flex items-center gap-1.5 mb-4" style={{ color: "#7A8A85" }}><ArrowLeft size={14} /> Todos los niños</button>
+        <PlanView nino={ninoPlan} maestraCode={maestra.code} professionalId={maestra.professionalId} mode="maestra" showToast={showToast} />
+      </div>
+    );
+  }
+
   return (
     <div className="w-full max-w-md px-5 pt-8 pb-16 flex-1">
       <div className="flex items-center gap-2.5 mb-5">
@@ -1831,30 +2348,63 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
         <div><p className="text-xs" style={{ color: "#7A8A85" }}>{maestra.funcion}</p><p className="font-semibold" style={{ color: "#2E3A36" }}>{maestra.name} · {maestra.grupo}</p></div>
       </div>
 
-      <GlassCard className="p-4 mb-4">
-        <DayNav date={date} setDate={setDate} />
-      </GlassCard>
-
-      <GlassCard className="p-4 mb-4">
-        <p className="text-xs font-medium mb-2" style={{ color: "#4A9483" }}>Registro rápido para todo el grupo</p>
-        <div className="grid grid-cols-3 gap-1.5 mb-1.5">
-          {MEAL_OPTIONS.map((o) => (
-            <button key={o.key} disabled={bulkBusy} onClick={() => bulkMeal(o.key)} className="py-2.5 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: "rgba(232,185,61,0.1)", color: "#C99A2E" }}>{o.label}</button>
+      <GlassCard className="p-1.5 mb-4">
+        <div className="flex gap-1">
+          {[{ id: "bitacoras", label: "Bitácoras" }, { id: "plan", label: "Plan de desarrollo" }].map((t) => (
+            <button key={t.id} onClick={() => setModo(t.id)} className="flex-1 py-2 rounded-xl text-sm font-medium transition-all"
+              style={modo === t.id ? { background: "#5FB3A1", color: "white" } : { color: "#7A8A85" }}>
+              {t.label}
+            </button>
           ))}
         </div>
-        <p className="text-xs mb-1.5" style={{ color: "#7A8A85" }}>Siesta (todos)</p>
-        <div className="grid grid-cols-2 gap-1.5 mb-1.5">
-          {NAP_DURATIONS.map((d) => (
-            <button key={d.key} disabled={bulkBusy} onClick={() => bulkNap("si", d.key)} className="py-2.5 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: "rgba(95,179,161,0.08)", color: "#4A9483" }}>{d.label}</button>
-          ))}
-        </div>
-        <button disabled={bulkBusy} onClick={() => bulkNap("no")} className="w-full py-2.5 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.7)", color: "#5C6B66", border: "1px solid rgba(122,138,133,0.2)" }}>No durmieron siesta (todos)</button>
       </GlassCard>
 
-      <div className="space-y-2">
-        {ninos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>No hay niños registrados en tu grupo todavía.</p></GlassCard>}
-        {ninos.map((n) => <NinoLogWidget key={n.id} nino={n} date={date} showToast={showToast} />)}
-      </div>
+      {modo === "bitacoras" ? (
+        <>
+          <GlassCard className="p-4 mb-4">
+            <DayNav date={date} setDate={setDate} />
+          </GlassCard>
+
+          <GlassCard className="p-4 mb-4">
+            <p className="text-xs font-medium mb-2" style={{ color: "#4A9483" }}>Registro rápido para todo el grupo</p>
+            <div className="grid grid-cols-3 gap-1.5 mb-1.5">
+              {MEAL_OPTIONS.map((o) => (
+                <button key={o.key} disabled={bulkBusy} onClick={() => bulkMeal(o.key)} className="py-2.5 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: "rgba(232,185,61,0.1)", color: "#C99A2E" }}>{o.label}</button>
+              ))}
+            </div>
+            <p className="text-xs mb-1.5" style={{ color: "#7A8A85" }}>Siesta (todos)</p>
+            <div className="grid grid-cols-2 gap-1.5 mb-1.5">
+              {NAP_DURATIONS.map((d) => (
+                <button key={d.key} disabled={bulkBusy} onClick={() => bulkNap("si", d.key)} className="py-2.5 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: "rgba(95,179,161,0.08)", color: "#4A9483" }}>{d.label}</button>
+              ))}
+            </div>
+            <button disabled={bulkBusy} onClick={() => bulkNap("no")} className="w-full py-2.5 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.7)", color: "#5C6B66", border: "1px solid rgba(122,138,133,0.2)" }}>No durmieron siesta (todos)</button>
+          </GlassCard>
+
+          <div className="space-y-2">
+            {ninos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>No hay niños registrados en tu grupo todavía.</p></GlassCard>}
+            {ninos.map((n) => <NinoLogWidget key={n.id} nino={n} date={date} showToast={showToast} />)}
+          </div>
+        </>
+      ) : (
+        <div className="space-y-2">
+          {ninos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>No hay niños registrados en tu grupo todavía.</p></GlassCard>}
+          {ninos.map((n) => (
+            <button key={n.id} onClick={() => setNinoPlan(n)} className="w-full flex items-center justify-between gap-3 p-3.5 rounded-2xl text-left" style={{ background: "rgba(255,255,255,0.6)" }}>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 overflow-hidden" style={{ background: "rgba(95,179,161,0.12)" }}>
+                  {n.foto ? <img src={n.foto} alt="" className="w-full h-full object-cover" /> : <Target size={16} color="#4A9483" />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: "#2E3A36" }}>{n.name}</p>
+                  <p className="text-xs" style={{ color: "#7A8A85" }}>{n.fechaNacimiento ? formatEdad(n.fechaNacimiento) : "Sin fecha de nacimiento"}</p>
+                </div>
+              </div>
+              <ChevronRight size={16} color="#C7D9D4" className="shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
 
       <button onClick={onExitDemo} className="text-xs mt-6 mx-auto flex items-center gap-1 justify-center w-full" style={{ color: "#BFD9D1" }}>
         <ArrowLeft size={12} /> Salir de la vista previa
@@ -1868,6 +2418,7 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
 function PadreBottomNav({ tab, setTab }) {
   const items = [
     { id: "inicio", label: "Inicio", icon: Home },
+    { id: "avances", label: "Avances", icon: Target },
     { id: "anuncios", label: "Anuncios", icon: Megaphone },
     { id: "mensajes", label: "Mensajes", icon: MessageCircle },
   ];
@@ -1977,6 +2528,28 @@ function PadreInicioTab({ hijos }) {
   );
 }
 
+function PadreAvancesTab({ hijos, professionalId }) {
+  const [selected, setSelected] = useState(hijos[0] || null);
+
+  if (hijos.length === 0) return <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>Aún no hay niños vinculados a tu cuenta.</p></GlassCard>;
+
+  return (
+    <div className="space-y-3">
+      {hijos.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {hijos.map((n) => (
+            <button key={n.id} onClick={() => setSelected(n)} className="shrink-0 px-3.5 py-2 rounded-full text-xs font-medium"
+              style={selected?.id === n.id ? { background: "#5FB3A1", color: "white" } : { background: "#FFFFFF", color: "#7A8A85", border: "1px solid rgba(46,58,54,0.08)" }}>
+              {n.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {selected && <PlanView nino={selected} professionalId={professionalId} mode="padre" />}
+    </div>
+  );
+}
+
 function PadreAnunciosTab({ profesionalId }) {
   const [circulares, setCirculares] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2074,6 +2647,7 @@ function PadreHub({ code, onExitDemo, showToast, persist = true }) {
       </div>
 
       {tab === "inicio" && <PadreInicioTab hijos={hijos} />}
+      {tab === "avances" && <PadreAvancesTab hijos={hijos} professionalId={padre.professionalId} />}
       {tab === "anuncios" && <PadreAnunciosTab profesionalId={padre.professionalId} />}
       {tab === "mensajes" && <PadreMensajesTab padreCode={padre.code} showToast={showToast} />}
 
