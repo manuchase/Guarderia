@@ -1,8 +1,0 @@
-name = "guarderia-api"
-main = "src/index.js"
-compatibility_date = "2026-09-01"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "guarderia-db"
-database_id = "c3c1fced-baa4-463d-b5af-0d31a9502a80"
