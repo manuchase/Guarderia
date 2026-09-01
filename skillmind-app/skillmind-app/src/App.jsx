@@ -90,7 +90,7 @@ const NAP_DURATIONS = [
 
 // API de Cloudflare que sustituye completamente a Supabase.
 // Puedes sobrescribirla en Netlify con VITE_API_URL si en el futuro cambias de dominio.
-const API_URL = (import.meta.env.VITE_API_URL || "https://guarderia-api.manueeyala.workers.dev").replace(/\/$/, "");
+const API_URL = (import.meta.env.VITE_API_URL || "https://guarderia-api.manuueeyala.workers.dev").replace(/\/$/, "");
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
