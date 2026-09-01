@@ -89,37 +89,135 @@ const NAP_DURATIONS = [
 /* ============================ Cloudflare Worker + D1 ============================ */
 
 // API de Cloudflare que sustituye completamente a Supabase.
-// Puedes sobrescribirla en Netlify con VITE_API_URL si en el futuro cambias de dominio.
-const API_URL = (import.meta.env.VITE_API_URL || "https://guarderia-api.manuueeyala.workers.dev").replace(/\/$/, "");
+const API_URL = (
+  import.meta.env.VITE_API_URL ||
+  "https://guarderia-api.manuueeyala.workers.dev"
+).replace(/\/$/, "");
 
-function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function wait(ms) {
+  return new Promise((r) =>
+    setTimeout(r, ms)
+  );
+}
 
-async function sb(path, options = {}, attempts = 3) {
+/*
+ * Comunicación con Cloudflare Worker.
+ *
+ * GET y DELETE:
+ *   No envían Content-Type innecesario.
+ *
+ * POST:
+ *   Envía application/json porque lleva
+ *   información JSON en el body.
+ */
+async function sb(
+  path,
+  options = {},
+  attempts = 3
+) {
   let lastErr;
-  for (let i = 0; i < attempts; i++) {
+
+  for (
+    let i = 0;
+    i < attempts;
+    i++
+  ) {
     try {
-      const res = await fetch(`${API_URL}/rest/v1/${path}`, {
-        ...options,
-        headers: {
-          "Content-Type": "application/json",
-          Prefer: options.prefer || "return=representation",
-          ...(options.headers || {}),
-        },
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
+
+      const method = (
+        options.method || "GET"
+      ).toUpperCase();
+
+      const headers = {
+        Prefer:
+          options.prefer ||
+          "return=representation",
+
+        ...(options.headers || {})
+      };
+
+      /*
+       * IMPORTANTE:
+       * Content-Type solamente para POST.
+       *
+       * Esto evita que los GET generen
+       * preflight CORS innecesariamente.
+       */
+      if (
+        method === "POST"
+      ) {
+        headers[
+          "Content-Type"
+        ] = "application/json";
       }
-      const text = await res.text();
-      return text ? JSON.parse(text) : null;
+
+      const res =
+        await fetch(
+          `${API_URL}/rest/v1/${path}`,
+          {
+            ...options,
+            headers
+          }
+        );
+
+      if (!res.ok) {
+
+        const text =
+          await res
+            .text()
+            .catch(() => "");
+
+        throw new Error(
+          `API ${res.status}: ${text.slice(
+            0,
+            500
+          )}`
+        );
+      }
+
+      const text =
+        await res.text();
+
+      return text
+        ? JSON.parse(text)
+        : null;
+
     } catch (err) {
+
       lastErr = err;
-      if (i < attempts - 1) await wait(400 * (i + 1));
+
+      if (
+        i <
+        attempts - 1
+      ) {
+        await wait(
+          400 * (i + 1)
+        );
+      }
     }
   }
-  if (lastErr?.name === "TypeError" || lastErr?.message === "Failed to fetch") {
-    throw new Error("No se pudo conectar con el servidor. Verifica la conexión y que el servicio esté disponible.");
+
+  /*
+   * Solamente mostramos el mensaje
+   * genérico cuando realmente el navegador
+   * no pudo comunicarse con el Worker.
+   */
+  if (
+    lastErr?.name ===
+      "TypeError" ||
+    lastErr?.message ===
+      "Failed to fetch"
+  ) {
+    throw new Error(
+      "No se pudo conectar con el servidor. Verifica la conexión y que el servicio esté disponible."
+    );
   }
+
+  /*
+   * Si Cloudflare devuelve 400, 404,
+   * 500, etc., ahora mostramos el
+   * error real.
+   */
   throw lastErr;
 }
 
