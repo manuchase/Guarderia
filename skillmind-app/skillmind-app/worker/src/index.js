@@ -21,21 +21,7 @@ const TABLES = {
   },
   plan_objetivos: {
     pk: "id",
-    columns: [
-      "id",
-      "plan_id",
-      "origen",
-      "area",
-      "texto",
-      "es_principal",
-      "nivel_inicial",
-      "meta_esperada",
-      "progreso",
-      "estado",
-      "observaciones",
-      "visible_padres",
-      "updated_at"
-    ]
+    columns: ["id", "plan_id", "origen", "area", "texto", "es_principal", "nivel_inicial", "meta_esperada", "progreso", "estado", "observaciones", "visible_padres", "updated_at"]
   },
   plan_registros: {
     pk: "id",
@@ -70,14 +56,25 @@ const BOOL_COLUMNS = new Set([
   "visible_padres"
 ]);
 
+/* =========================
+   CORS
+   ========================= */
+
 function cors(req) {
   const origin = req.headers.get("Origin") || "";
 
+  const allowedOrigins = [
+    "https://kidsnido.netlify.app",
+    "http://localhost:5173",
+    "http://localhost:3000"
+  ];
+
+  const isNetlifyPreview =
+    /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(origin);
+
   const allowed =
-    origin === "https://kidsnido.netlify.app" ||
-    /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(origin) ||
-    origin === "http://localhost:5173" ||
-    origin === "http://localhost:3000";
+    allowedOrigins.includes(origin) ||
+    isNetlifyPreview;
 
   return {
     "Access-Control-Allow-Origin": allowed
@@ -90,20 +87,32 @@ function cors(req) {
     "Access-Control-Allow-Methods":
       "GET, POST, DELETE, OPTIONS",
 
-    "Access-Control-Max-Age": "86400",
+    "Access-Control-Max-Age":
+      "86400",
 
-    "Vary": "Origin"
+    "Access-Control-Expose-Headers":
+      "Content-Type",
+
+    "Vary":
+      "Origin"
   };
 }
 
+/* =========================
+   RESPUESTAS
+   ========================= */
+
 function out(req, data, status = 200, extra = {}) {
   return new Response(
-    data === null ? null : JSON.stringify(data),
+    data === null
+      ? null
+      : JSON.stringify(data),
     {
       status,
       headers: {
         ...cors(req),
-        "Content-Type": "application/json; charset=utf-8",
+        "Content-Type":
+          "application/json; charset=utf-8",
         ...extra
       }
     }
@@ -116,16 +125,25 @@ function err(req, status, msg, details = null) {
     {
       message: msg,
       error: msg,
-      ...(details ? { details } : {})
+      details: details || undefined
     },
     status
   );
 }
 
-function tableFrom(path) {
-  const p = path.split("/").filter(Boolean);
+/* =========================
+   RUTAS
+   ========================= */
 
-  if (p[0] === "rest" && p[1] === "v1") {
+function tableFrom(path) {
+  const p = path
+    .split("/")
+    .filter(Boolean);
+
+  if (
+    p[0] === "rest" &&
+    p[1] === "v1"
+  ) {
     return p[2];
   }
 
@@ -144,90 +162,105 @@ function dec(v) {
   }
 }
 
-function filters(url, t) {
-  const result = [];
+/* =========================
+   FILTROS
+   ========================= */
 
-  for (const [key, raw] of url.searchParams) {
+function filters(url, t) {
+  const a = [];
+
+  for (const [k, raw] of url.searchParams) {
     if (
-      ["select", "order", "limit", "offset"].includes(key) ||
-      !t.columns.includes(key)
+      ["select", "order", "limit", "offset"].includes(k) ||
+      !t.columns.includes(k)
     ) {
       continue;
     }
 
-    const value = dec(raw);
+    const v = dec(raw);
 
-    if (value.startsWith("eq.")) {
-      result.push({
-        k: key,
+    if (v.startsWith("eq.")) {
+      a.push({
+        k,
         op: "=",
-        v: value.slice(3)
+        v: v.slice(3)
       });
-    }
-
-    else if (
-      value.startsWith("in.(") &&
-      value.endsWith(")")
+    } else if (
+      v.startsWith("in.(") &&
+      v.endsWith(")")
     ) {
-      result.push({
-        k: key,
+      a.push({
+        k,
         op: "IN",
-        vs: value
+        vs: v
           .slice(4, -1)
           .split(",")
-          .map(x => x.replace(/^"(.*)"$/, "$1"))
+          .map(x =>
+            x.replace(/^"(.*)"$/, "$1")
+          )
       });
-    }
-
-    else if (value === "is.null") {
-      result.push({
-        k: key,
+    } else if (v === "is.null") {
+      a.push({
+        k,
         op: "IS NULL"
       });
-    }
-
-    else if (value === "is.not.null") {
-      result.push({
-        k: key,
+    } else if (v === "is.not.null") {
+      a.push({
+        k,
         op: "IS NOT NULL"
       });
     }
   }
 
-  return result;
+  return a;
 }
 
-function selected(url, t) {
-  const select = url.searchParams.get("select");
+/* =========================
+   SELECT
+   ========================= */
 
-  if (!select || select === "*") {
+function selected(url, t) {
+  const s =
+    url.searchParams.get("select");
+
+  if (!s || s === "*") {
     return t.columns;
   }
 
-  return select
+  return s
     .split(",")
-    .filter(x => t.columns.includes(x.trim()))
+    .filter(x =>
+      t.columns.includes(x.trim())
+    )
     .map(x => x.trim());
 }
 
-function orders(url, t) {
-  const order = url.searchParams.get("order");
+/* =========================
+   ORDER
+   ========================= */
 
-  if (!order) {
+function orders(url, t) {
+  const s =
+    url.searchParams.get("order");
+
+  if (!s) {
     return [];
   }
 
-  return order
+  return s
     .split(",")
     .map(x => {
-      const [field, direction = "asc"] = x.trim().split(".");
+      const [
+        f,
+        d = "asc"
+      ] = x.trim().split(".");
 
-      if (!t.columns.includes(field)) {
+      if (!t.columns.includes(f)) {
         return null;
       }
 
-      return `${field} ${
-        direction.toLowerCase() === "desc"
+      return `${f} ${
+        d.toLowerCase() === "desc"
           ? "DESC"
           : "ASC"
       }`;
@@ -235,148 +268,183 @@ function orders(url, t) {
     .filter(Boolean);
 }
 
-function decode(row) {
-  const result = {
-    ...row
-  };
+/* =========================
+   DECODIFICAR D1
+   ========================= */
 
-  for (const column of JSON_COLUMNS) {
+function decode(r) {
+  const x = { ...r };
+
+  for (const c of JSON_COLUMNS) {
     if (
-      column in result &&
-      typeof result[column] === "string"
+      c in x &&
+      typeof x[c] === "string"
     ) {
       try {
-        result[column] = JSON.parse(result[column]);
+        x[c] = JSON.parse(x[c]);
       } catch {
-        result[column] = [];
+        x[c] = [];
       }
     }
   }
 
-  for (const column of BOOL_COLUMNS) {
-    if (column in result) {
-      result[column] = !!result[column];
+  for (const c of BOOL_COLUMNS) {
+    if (c in x) {
+      x[c] = !!x[c];
     }
   }
 
-  return result;
+  return x;
 }
 
-function encode(column, value) {
-  if (value === undefined) {
+/* =========================
+   CODIFICAR PARA D1
+   ========================= */
+
+function encode(c, v) {
+  if (v === undefined) {
     return null;
   }
 
-  if (JSON_COLUMNS.has(column)) {
-    return typeof value === "string"
-      ? value
-      : JSON.stringify(value);
+  if (JSON_COLUMNS.has(c)) {
+    return typeof v === "string"
+      ? v
+      : JSON.stringify(v);
   }
 
-  if (BOOL_COLUMNS.has(column)) {
+  if (BOOL_COLUMNS.has(c)) {
     return (
-      value === true ||
-      value === 1 ||
-      value === "1"
+      v === true ||
+      v === 1 ||
+      v === "1"
     )
       ? 1
       : 0;
   }
 
   if (
-    value !== null &&
-    typeof value === "object"
+    v !== null &&
+    typeof v === "object"
   ) {
-    return JSON.stringify(value);
+    return JSON.stringify(v);
   }
 
-  return value;
+  return v;
 }
 
-async function get(req, env, name, table, url) {
-  const fs = filters(url, table);
+/* =========================
+   GET
+   ========================= */
 
+async function get(
+  req,
+  env,
+  name,
+  t,
+  url
+) {
+  const fs = filters(url, t);
   const where = [];
-  const bindings = [];
+  const b = [];
 
-  for (const filter of fs) {
-    if (filter.op === "IN") {
-      if (!filter.vs.length) {
+  for (const f of fs) {
+    if (f.op === "IN") {
+      if (!f.vs.length) {
         where.push("1=0");
       } else {
         where.push(
-          `${filter.k} IN (${filter.vs
+          `${f.k} IN (${f.vs
             .map(() => "?")
             .join(",")})`
         );
 
-        bindings.push(...filter.vs);
+        b.push(...f.vs);
       }
-    }
-
-    else if (filter.op.includes("NULL")) {
+    } else if (
+      f.op.includes("NULL")
+    ) {
       where.push(
-        `${filter.k} ${filter.op}`
+        `${f.k} ${f.op}`
       );
-    }
+    } else {
+      where.push(
+        `${f.k} = ?`
+      );
 
-    else {
-      where.push(`${filter.k} = ?`);
-      bindings.push(filter.v);
+      b.push(f.v);
     }
   }
 
-  let sql = `
-    SELECT ${selected(url, table).join(",")}
-    FROM ${name}
-  `;
+  let sql =
+    `SELECT ${selected(url, t).join(",")} FROM ${name}`;
 
   if (where.length) {
-    sql += ` WHERE ${where.join(" AND ")}`;
+    sql +=
+      ` WHERE ${where.join(" AND ")}`;
   }
 
-  const order = orders(url, table);
+  const os = orders(url, t);
 
-  if (order.length) {
-    sql += ` ORDER BY ${order.join(",")}`;
+  if (os.length) {
+    sql +=
+      " ORDER BY " +
+      os.join(",");
   }
 
-  const limit = Number(
-    url.searchParams.get("limit")
-  );
-
-  if (
-    Number.isFinite(limit) &&
-    limit > 0
-  ) {
-    sql += " LIMIT ?";
-    bindings.push(Math.floor(limit));
-
-    const offset = Number(
-      url.searchParams.get("offset")
+  const lim =
+    Number(
+      url.searchParams.get("limit")
     );
 
+  if (
+    Number.isFinite(lim) &&
+    lim > 0
+  ) {
+    sql += " LIMIT ?";
+
+    b.push(
+      Math.floor(lim)
+    );
+
+    const off =
+      Number(
+        url.searchParams.get("offset")
+      );
+
     if (
-      Number.isFinite(offset) &&
-      offset >= 0
+      Number.isFinite(off) &&
+      off >= 0
     ) {
       sql += " OFFSET ?";
-      bindings.push(Math.floor(offset));
+
+      b.push(
+        Math.floor(off)
+      );
     }
   }
 
-  const result = await env.DB
-    .prepare(sql)
-    .bind(...bindings)
-    .all();
+  const r =
+    await env.DB
+      .prepare(sql)
+      .bind(...b)
+      .all();
 
   return out(
     req,
-    (result.results || []).map(decode)
+    (r.results || []).map(decode)
   );
 }
 
-async function post(req, env, name, table) {
+/* =========================
+   POST
+   ========================= */
+
+async function post(
+  req,
+  env,
+  name,
+  t
+) {
   let body;
 
   try {
@@ -385,19 +453,20 @@ async function post(req, env, name, table) {
     return err(
       req,
       400,
-      "El cuerpo de la solicitud no contiene JSON válido."
+      "JSON inválido"
     );
   }
 
-  const rows = Array.isArray(body)
-    ? body
-    : [body];
+  const rows =
+    Array.isArray(body)
+      ? body
+      : [body];
 
   if (!rows.length) {
     return err(
       req,
       400,
-      "No se recibieron datos para guardar."
+      "No se recibieron datos"
     );
   }
 
@@ -406,64 +475,57 @@ async function post(req, env, name, table) {
   for (const row of rows) {
     if (
       !row ||
-      row[table.pk] === undefined ||
-      row[table.pk] === null ||
-      row[table.pk] === ""
+      row[t.pk] === undefined ||
+      row[t.pk] === null ||
+      row[t.pk] === ""
     ) {
       return err(
         req,
         400,
-        `Falta el campo obligatorio "${table.pk}".`,
+        `Falta ${t.pk}`,
         {
           table: name,
-          primaryKey: table.pk,
-          received: row
+          primaryKey: t.pk
         }
       );
     }
 
-    const columns = table.columns.filter(
-      column =>
-        Object.prototype.hasOwnProperty.call(
-          row,
-          column
-        )
-    );
+    const cs =
+      t.columns.filter(c =>
+        Object.hasOwn(row, c)
+      );
 
-    if (!columns.length) {
+    if (!cs.length) {
       continue;
     }
 
-    const updateColumns = columns.filter(
-      column => column !== table.pk
-    );
+    const upd =
+      cs.filter(c =>
+        c !== t.pk
+      );
 
-    let sql = `
-      INSERT INTO ${name}
-      (${columns.join(",")})
-      VALUES (${columns.map(() => "?").join(",")})
-    `;
+    let sql =
+      `INSERT INTO ${name} (${cs.join(",")}) VALUES (${cs
+        .map(() => "?")
+        .join(",")})`;
 
-    if (updateColumns.length) {
-      sql += `
-        ON CONFLICT(${table.pk})
-        DO UPDATE SET
-        ${updateColumns
+    if (upd.length) {
+      sql +=
+        ` ON CONFLICT(${t.pk}) DO UPDATE SET ` +
+        upd
           .map(
-            column =>
-              `${column}=excluded.${column}`
+            c =>
+              `${c}=excluded.${c}`
           )
-          .join(",")}
-      `;
+          .join(",");
     }
 
     statements.push(
       env.DB
         .prepare(sql)
         .bind(
-          ...columns.map(
-            column =>
-              encode(column, row[column])
+          ...cs.map(c =>
+            encode(c, row[c])
           )
         )
     );
@@ -473,32 +535,33 @@ async function post(req, env, name, table) {
     return err(
       req,
       400,
-      "No hay columnas válidas para guardar.",
+      "No hay columnas válidas para guardar",
       {
-        table: name,
-        columns: table.columns
+        table: name
       }
     );
   }
 
   try {
-    await env.DB.batch(statements);
-  } catch (error) {
+    await env.DB.batch(
+      statements
+    );
+  } catch (e) {
     console.error(
-      "D1 POST ERROR:",
+      "D1 POST ERROR",
       name,
-      error
+      e
     );
 
     return err(
       req,
       500,
-      "D1 rechazó el guardado.",
+      "Error al guardar en D1",
       {
         table: name,
         message:
-          error?.message ||
-          String(error)
+          e?.message ||
+          String(e)
       }
     );
   }
@@ -506,122 +569,102 @@ async function post(req, env, name, table) {
   const result = [];
 
   for (const row of rows) {
-    try {
-      const saved = await env.DB
+    const r =
+      await env.DB
         .prepare(
-          `SELECT ${table.columns.join(",")}
-           FROM ${name}
-           WHERE ${table.pk} = ?`
+          `SELECT ${t.columns.join(",")} FROM ${name} WHERE ${t.pk}=?`
         )
-        .bind(row[table.pk])
+        .bind(row[t.pk])
         .first();
 
-      if (saved) {
-        result.push(decode(saved));
-      }
-    } catch (error) {
-      console.error(
-        "D1 READ AFTER POST ERROR:",
-        name,
-        error
-      );
-
-      return err(
-        req,
-        500,
-        "El registro se guardó, pero no pudo recuperarse.",
-        {
-          table: name,
-          message:
-            error?.message ||
-            String(error)
-        }
+    if (r) {
+      result.push(
+        decode(r)
       );
     }
   }
 
-  return out(req, result, 200);
+  return out(
+    req,
+    result,
+    200
+  );
 }
+
+/* =========================
+   DELETE
+   ========================= */
 
 async function del(
   req,
   env,
   name,
-  table,
+  t,
   url
 ) {
-  const fs = filters(url, table);
+  const fs =
+    filters(url, t);
 
   if (!fs.length) {
     return err(
       req,
       400,
-      "DELETE requiere al menos un filtro."
+      "DELETE requiere filtro"
     );
   }
 
-  const where = [];
-  const bindings = [];
+  const w = [];
+  const b = [];
 
-  for (const filter of fs) {
-    if (filter.op === "IN") {
-      where.push(
-        `${filter.k} IN (${filter.vs
+  for (const f of fs) {
+    if (f.op === "IN") {
+      w.push(
+        `${f.k} IN (${f.vs
           .map(() => "?")
           .join(",")})`
       );
 
-      bindings.push(...filter.vs);
-    }
-
-    else if (filter.op.includes("NULL")) {
-      where.push(
-        `${filter.k} ${filter.op}`
+      b.push(...f.vs);
+    } else if (
+      f.op.includes("NULL")
+    ) {
+      w.push(
+        `${f.k} ${f.op}`
       );
-    }
+    } else {
+      w.push(
+        `${f.k}=?`
+      );
 
-    else {
-      where.push(`${filter.k} = ?`);
-      bindings.push(filter.v);
+      b.push(f.v);
     }
   }
 
-  try {
-    await env.DB
-      .prepare(
-        `DELETE FROM ${name}
-         WHERE ${where.join(" AND ")}`
-      )
-      .bind(...bindings)
-      .run();
+  await env.DB
+    .prepare(
+      `DELETE FROM ${name} WHERE ${w.join(" AND ")}`
+    )
+    .bind(...b)
+    .run();
 
-    return out(req, null, 204);
-  } catch (error) {
-    console.error(
-      "D1 DELETE ERROR:",
-      name,
-      error
-    );
-
-    return err(
-      req,
-      500,
-      "D1 rechazó la eliminación.",
-      {
-        table: name,
-        message:
-          error?.message ||
-          String(error)
-      }
-    );
-  }
+  return out(
+    req,
+    null,
+    204
+  );
 }
+
+/* =========================
+   WORKER
+   ========================= */
 
 export default {
   async fetch(req, env) {
 
     /*
-     * CORS
+     * PRE-FLIGHT CORS
+     * El navegador llega aquí antes de
+     * algunas peticiones cross-origin.
      */
     if (req.method === "OPTIONS") {
       return new Response(null, {
@@ -630,89 +673,93 @@ export default {
       });
     }
 
-    const url = new URL(req.url);
+    const u =
+      new URL(req.url);
 
-    /*
-     * Health check
-     */
-    if (url.pathname === "/health") {
-      return out(req, {
-        ok: true,
-        service: "guarderia-api",
-        database: "D1"
-      });
+    /* Health check */
+    if (
+      u.pathname === "/health"
+    ) {
+      return out(
+        req,
+        {
+          ok: true,
+          service: "guarderia-api",
+          database: "D1"
+        }
+      );
     }
 
-    /*
-     * Detectar tabla
-     */
-    const tableName = tableFrom(
-      url.pathname
-    );
+    const name =
+      tableFrom(u.pathname);
 
-    const table = TABLES[tableName];
+    const t =
+      TABLES[name];
 
-    if (!table) {
+    if (!t) {
       return err(
         req,
         404,
-        "Ruta no encontrada."
+        "Ruta no encontrada"
       );
     }
 
     try {
 
-      if (req.method === "GET") {
-        return await get(
+      if (
+        req.method === "GET"
+      ) {
+        return get(
           req,
           env,
-          tableName,
-          table,
-          url
+          name,
+          t,
+          u
         );
       }
 
-      if (req.method === "POST") {
-        return await post(
+      if (
+        req.method === "POST"
+      ) {
+        return post(
           req,
           env,
-          tableName,
-          table
+          name,
+          t
         );
       }
 
-      if (req.method === "DELETE") {
-        return await del(
+      if (
+        req.method === "DELETE"
+      ) {
+        return del(
           req,
           env,
-          tableName,
-          table,
-          url
+          name,
+          t,
+          u
         );
       }
 
       return err(
         req,
         405,
-        "Método no permitido."
+        "Método no permitido"
       );
 
-    } catch (error) {
+    } catch (e) {
 
       console.error(
-        "WORKER ERROR:",
-        error
+        "WORKER ERROR",
+        e
       );
 
       return err(
         req,
         500,
-        "Error interno del servidor.",
-        {
-          message:
-            error?.message ||
-            String(error)
-        }
+        "Error interno del servidor",
+        e?.message ||
+          String(e)
       );
     }
   }
