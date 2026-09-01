@@ -1,102 +1,719 @@
 const TABLES = {
-  professionals:{pk:"id",columns:["id","name","username","password","role","guarderia","created_at"]},
-  maestras:{pk:"code",columns:["code","name","funcion","grupo","telefono","professional_id","created_at"]},
-  ninos:{pk:"id",columns:["id","name","grupo","foto","fecha_nacimiento","professional_id","created_at","activo"]},
-  bitacoras:{pk:"id",columns:["id","nino_id","nino_name","grupo","date","professional_id","alimentacion","panales","siestas","animos","notas"]},
-  planes:{pk:"id",columns:["id","nino_id","professional_id","mes","maestra_code","edad_meses","estado","created_at","closed_at","resumen"]},
-  plan_objetivos:{pk:"id",columns:["id","plan_id","origen","area","texto","es_principal","nivel_inicial","meta_esperada","progreso","estado","observaciones","visible_padres","updated_at"]},
-  plan_registros:{pk:"id",columns:["id","objetivo_id","fecha","progreso","observacion","usuario","created_at"]},
-  padres:{pk:"code",columns:["code","name","nino_ids","telefono","professional_id","created_at"]},
-  circulares:{pk:"id",columns:["id","professional_id","title","body","created_at"]},
-  mensajes_padres:{pk:"id",columns:["id","padre_code","from_role","text","at"]}
+  professionals: {
+    pk: "id",
+    columns: ["id", "name", "username", "password", "role", "guarderia", "created_at"]
+  },
+  maestras: {
+    pk: "code",
+    columns: ["code", "name", "funcion", "grupo", "telefono", "professional_id", "created_at"]
+  },
+  ninos: {
+    pk: "id",
+    columns: ["id", "name", "grupo", "foto", "fecha_nacimiento", "professional_id", "created_at", "activo"]
+  },
+  bitacoras: {
+    pk: "id",
+    columns: ["id", "nino_id", "nino_name", "grupo", "date", "professional_id", "alimentacion", "panales", "siestas", "animos", "notas"]
+  },
+  planes: {
+    pk: "id",
+    columns: ["id", "nino_id", "professional_id", "mes", "maestra_code", "edad_meses", "estado", "created_at", "closed_at", "resumen"]
+  },
+  plan_objetivos: {
+    pk: "id",
+    columns: [
+      "id",
+      "plan_id",
+      "origen",
+      "area",
+      "texto",
+      "es_principal",
+      "nivel_inicial",
+      "meta_esperada",
+      "progreso",
+      "estado",
+      "observaciones",
+      "visible_padres",
+      "updated_at"
+    ]
+  },
+  plan_registros: {
+    pk: "id",
+    columns: ["id", "objetivo_id", "fecha", "progreso", "observacion", "usuario", "created_at"]
+  },
+  padres: {
+    pk: "code",
+    columns: ["code", "name", "nino_ids", "telefono", "professional_id", "created_at"]
+  },
+  circulares: {
+    pk: "id",
+    columns: ["id", "professional_id", "title", "body", "created_at"]
+  },
+  mensajes_padres: {
+    pk: "id",
+    columns: ["id", "padre_code", "from_role", "text", "at"]
+  }
 };
-const JSON_COLUMNS=new Set(["alimentacion","panales","siestas","animos","notas","nino_ids"]);
-const BOOL_COLUMNS=new Set(["activo","es_principal","visible_padres"]);
 
-function cors(req){
-  const o=req.headers.get("Origin");
-  const allowed=o&&/^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(o)?o:"null";
-  return {"Access-Control-Allow-Origin":allowed,"Access-Control-Allow-Headers":"Content-Type, apikey, Authorization, Prefer","Access-Control-Allow-Methods":"GET,POST,DELETE,OPTIONS","Access-Control-Max-Age":"86400","Vary":"Origin"};
+const JSON_COLUMNS = new Set([
+  "alimentacion",
+  "panales",
+  "siestas",
+  "animos",
+  "notas",
+  "nino_ids"
+]);
+
+const BOOL_COLUMNS = new Set([
+  "activo",
+  "es_principal",
+  "visible_padres"
+]);
+
+function cors(req) {
+  const origin = req.headers.get("Origin") || "";
+
+  const allowed =
+    origin === "https://kidsnido.netlify.app" ||
+    /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(origin) ||
+    origin === "http://localhost:5173" ||
+    origin === "http://localhost:3000";
+
+  return {
+    "Access-Control-Allow-Origin": allowed
+      ? origin
+      : "https://kidsnido.netlify.app",
+
+    "Access-Control-Allow-Headers":
+      "Content-Type, apikey, Authorization, Prefer",
+
+    "Access-Control-Allow-Methods":
+      "GET, POST, DELETE, OPTIONS",
+
+    "Access-Control-Max-Age": "86400",
+
+    "Vary": "Origin"
+  };
 }
-function out(req,data,status=200,extra={}){
-  return new Response(data===null?null:JSON.stringify(data),{status,headers:{...cors(req),"Content-Type":"application/json; charset=utf-8",...extra}});
+
+function out(req, data, status = 200, extra = {}) {
+  return new Response(
+    data === null ? null : JSON.stringify(data),
+    {
+      status,
+      headers: {
+        ...cors(req),
+        "Content-Type": "application/json; charset=utf-8",
+        ...extra
+      }
+    }
+  );
 }
-function err(req,status,msg){return out(req,{message:msg,error:msg},status);}
-function tableFrom(path){
-  const p=path.split("/").filter(Boolean);
-  return p[0]==="rest"&&p[1]==="v1"?p[2]:p[0]==="api"?p[1]:null;
+
+function err(req, status, msg, details = null) {
+  return out(
+    req,
+    {
+      message: msg,
+      error: msg,
+      ...(details ? { details } : {})
+    },
+    status
+  );
 }
-function dec(v){try{return decodeURIComponent(v)}catch{return v}}
-function filters(url,t){
-  const a=[];
-  for(const [k,raw] of url.searchParams){
-    if(["select","order","limit","offset"].includes(k)||!t.columns.includes(k))continue;
-    const v=dec(raw);
-    if(v.startsWith("eq."))a.push({k,op:"=",v:v.slice(3)});
-    else if(v.startsWith("in.(")&&v.endsWith(")"))a.push({k,op:"IN",vs:v.slice(4,-1).split(",").map(x=>x.replace(/^"(.*)"$/,"$1"))});
-    else if(v==="is.null")a.push({k,op:"IS NULL"});
-    else if(v==="is.not.null")a.push({k,op:"IS NOT NULL"});
-  } return a;
-}
-function selected(url,t){
-  const s=url.searchParams.get("select");
-  return !s||s==="*"?t.columns:s.split(",").filter(x=>t.columns.includes(x.trim())).map(x=>x.trim());
-}
-function orders(url,t){
-  const s=url.searchParams.get("order"); if(!s)return [];
-  return s.split(",").map(x=>{const [f,d="asc"]=x.trim().split(".");return t.columns.includes(f)?`${f} ${d.toLowerCase()==="desc"?"DESC":"ASC"}`:null}).filter(Boolean);
-}
-function decode(r){
-  const x={...r};
-  for(const c of JSON_COLUMNS)if(c in x&&typeof x[c]==="string"){try{x[c]=JSON.parse(x[c])}catch{x[c]=[]}}
-  for(const c of BOOL_COLUMNS)if(c in x)x[c]=!!x[c];
-  return x;
-}
-function encode(c,v){
-  if(v===undefined)return null;
-  if(JSON_COLUMNS.has(c))return typeof v==="string"?v:JSON.stringify(v);
-  if(BOOL_COLUMNS.has(c))return v===true||v===1||v==="1"?1:0;
-  if(v!==null&&typeof v==="object")return JSON.stringify(v);
-  return v;
-}
-async function get(req,env,name,t,url){
-  const fs=filters(url,t), where=[],b=[];
-  for(const f of fs){
-    if(f.op==="IN"){if(!f.vs.length)where.push("1=0");else{where.push(`${f.k} IN (${f.vs.map(()=>"?").join(",")})`);b.push(...f.vs)}}
-    else if(f.op.includes("NULL"))where.push(`${f.k} ${f.op}`);
-    else{where.push(`${f.k} = ?`);b.push(f.v)}
+
+function tableFrom(path) {
+  const p = path.split("/").filter(Boolean);
+
+  if (p[0] === "rest" && p[1] === "v1") {
+    return p[2];
   }
-  let sql=`SELECT ${selected(url,t).join(",")} FROM ${name}`;
-  if(where.length)sql+=` WHERE ${where.join(" AND ")}`;
-  const os=orders(url,t);if(os.length)sql+=" ORDER BY "+os.join(",");
-  const lim=Number(url.searchParams.get("limit"));if(Number.isFinite(lim)&&lim>0){sql+=" LIMIT ?";b.push(Math.floor(lim));const off=Number(url.searchParams.get("offset"));if(Number.isFinite(off)&&off>=0){sql+=" OFFSET ?";b.push(Math.floor(off))}}
-  const r=await env.DB.prepare(sql).bind(...b).all();return out(req,(r.results||[]).map(decode));
-}
-async function post(req,env,name,t){
-  let body;try{body=await req.json()}catch{return err(req,400,"JSON inválido")}
-  const rows=Array.isArray(body)?body:[body];const statements=[];
-  for(const row of rows){
-    if(!row||row[t.pk]===undefined)return err(req,400,`Falta ${t.pk}`);
-    const cs=t.columns.filter(c=>Object.hasOwn(row,c));if(!cs.length)continue;
-    const upd=cs.filter(c=>c!==t.pk);
-    let sql=`INSERT INTO ${name} (${cs.join(",")}) VALUES (${cs.map(()=>"?").join(",")})`;
-    if(upd.length)sql+=` ON CONFLICT(${t.pk}) DO UPDATE SET `+upd.map(c=>`${c}=excluded.${c}`).join(",");
-    statements.push(env.DB.prepare(sql).bind(...cs.map(c=>encode(c,row[c]))));
+
+  if (p[0] === "api") {
+    return p[1];
   }
-  await env.DB.batch(statements);
-  const result=[];
-  for(const row of rows){const r=await env.DB.prepare(`SELECT ${t.columns.join(",")} FROM ${name} WHERE ${t.pk}=?`).bind(row[t.pk]).first();if(r)result.push(decode(r))}
-  return out(req,result,201);
+
+  return null;
 }
-async function del(req,env,name,t,url){
-  const fs=filters(url,t);if(!fs.length)return err(req,400,"DELETE requiere filtro");
-  const w=[],b=[];
-  for(const f of fs){if(f.op==="IN"){w.push(`${f.k} IN (${f.vs.map(()=>"?").join(",")})`);b.push(...f.vs)}else if(f.op.includes("NULL"))w.push(`${f.k} ${f.op}`);else{w.push(`${f.k}=?`);b.push(f.v)}}
-  await env.DB.prepare(`DELETE FROM ${name} WHERE ${w.join(" AND ")}`).bind(...b).run();return out(req,null,204);
+
+function dec(v) {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
 }
-export default{async fetch(req,env){
-  if(req.method==="OPTIONS")return new Response(null,{status:204,headers:cors(req)});
-  const u=new URL(req.url);if(u.pathname==="/health")return out(req,{ok:true,service:"guarderia-api",database:"D1"});
-  const name=tableFrom(u.pathname),t=TABLES[name];if(!t)return err(req,404,"Ruta no encontrada");
-  try{if(req.method==="GET")return get(req,env,name,t,u);if(req.method==="POST")return post(req,env,name,t);if(req.method==="DELETE")return del(req,env,name,t,u);return err(req,405,"Método no permitido")}catch(e){console.error(e);return err(req,500,e?.message||"Error interno")}}
+
+function filters(url, t) {
+  const result = [];
+
+  for (const [key, raw] of url.searchParams) {
+    if (
+      ["select", "order", "limit", "offset"].includes(key) ||
+      !t.columns.includes(key)
+    ) {
+      continue;
+    }
+
+    const value = dec(raw);
+
+    if (value.startsWith("eq.")) {
+      result.push({
+        k: key,
+        op: "=",
+        v: value.slice(3)
+      });
+    }
+
+    else if (
+      value.startsWith("in.(") &&
+      value.endsWith(")")
+    ) {
+      result.push({
+        k: key,
+        op: "IN",
+        vs: value
+          .slice(4, -1)
+          .split(",")
+          .map(x => x.replace(/^"(.*)"$/, "$1"))
+      });
+    }
+
+    else if (value === "is.null") {
+      result.push({
+        k: key,
+        op: "IS NULL"
+      });
+    }
+
+    else if (value === "is.not.null") {
+      result.push({
+        k: key,
+        op: "IS NOT NULL"
+      });
+    }
+  }
+
+  return result;
+}
+
+function selected(url, t) {
+  const select = url.searchParams.get("select");
+
+  if (!select || select === "*") {
+    return t.columns;
+  }
+
+  return select
+    .split(",")
+    .filter(x => t.columns.includes(x.trim()))
+    .map(x => x.trim());
+}
+
+function orders(url, t) {
+  const order = url.searchParams.get("order");
+
+  if (!order) {
+    return [];
+  }
+
+  return order
+    .split(",")
+    .map(x => {
+      const [field, direction = "asc"] = x.trim().split(".");
+
+      if (!t.columns.includes(field)) {
+        return null;
+      }
+
+      return `${field} ${
+        direction.toLowerCase() === "desc"
+          ? "DESC"
+          : "ASC"
+      }`;
+    })
+    .filter(Boolean);
+}
+
+function decode(row) {
+  const result = {
+    ...row
+  };
+
+  for (const column of JSON_COLUMNS) {
+    if (
+      column in result &&
+      typeof result[column] === "string"
+    ) {
+      try {
+        result[column] = JSON.parse(result[column]);
+      } catch {
+        result[column] = [];
+      }
+    }
+  }
+
+  for (const column of BOOL_COLUMNS) {
+    if (column in result) {
+      result[column] = !!result[column];
+    }
+  }
+
+  return result;
+}
+
+function encode(column, value) {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (JSON_COLUMNS.has(column)) {
+    return typeof value === "string"
+      ? value
+      : JSON.stringify(value);
+  }
+
+  if (BOOL_COLUMNS.has(column)) {
+    return (
+      value === true ||
+      value === 1 ||
+      value === "1"
+    )
+      ? 1
+      : 0;
+  }
+
+  if (
+    value !== null &&
+    typeof value === "object"
+  ) {
+    return JSON.stringify(value);
+  }
+
+  return value;
+}
+
+async function get(req, env, name, table, url) {
+  const fs = filters(url, table);
+
+  const where = [];
+  const bindings = [];
+
+  for (const filter of fs) {
+    if (filter.op === "IN") {
+      if (!filter.vs.length) {
+        where.push("1=0");
+      } else {
+        where.push(
+          `${filter.k} IN (${filter.vs
+            .map(() => "?")
+            .join(",")})`
+        );
+
+        bindings.push(...filter.vs);
+      }
+    }
+
+    else if (filter.op.includes("NULL")) {
+      where.push(
+        `${filter.k} ${filter.op}`
+      );
+    }
+
+    else {
+      where.push(`${filter.k} = ?`);
+      bindings.push(filter.v);
+    }
+  }
+
+  let sql = `
+    SELECT ${selected(url, table).join(",")}
+    FROM ${name}
+  `;
+
+  if (where.length) {
+    sql += ` WHERE ${where.join(" AND ")}`;
+  }
+
+  const order = orders(url, table);
+
+  if (order.length) {
+    sql += ` ORDER BY ${order.join(",")}`;
+  }
+
+  const limit = Number(
+    url.searchParams.get("limit")
+  );
+
+  if (
+    Number.isFinite(limit) &&
+    limit > 0
+  ) {
+    sql += " LIMIT ?";
+    bindings.push(Math.floor(limit));
+
+    const offset = Number(
+      url.searchParams.get("offset")
+    );
+
+    if (
+      Number.isFinite(offset) &&
+      offset >= 0
+    ) {
+      sql += " OFFSET ?";
+      bindings.push(Math.floor(offset));
+    }
+  }
+
+  const result = await env.DB
+    .prepare(sql)
+    .bind(...bindings)
+    .all();
+
+  return out(
+    req,
+    (result.results || []).map(decode)
+  );
+}
+
+async function post(req, env, name, table) {
+  let body;
+
+  try {
+    body = await req.json();
+  } catch {
+    return err(
+      req,
+      400,
+      "El cuerpo de la solicitud no contiene JSON válido."
+    );
+  }
+
+  const rows = Array.isArray(body)
+    ? body
+    : [body];
+
+  if (!rows.length) {
+    return err(
+      req,
+      400,
+      "No se recibieron datos para guardar."
+    );
+  }
+
+  const statements = [];
+
+  for (const row of rows) {
+    if (
+      !row ||
+      row[table.pk] === undefined ||
+      row[table.pk] === null ||
+      row[table.pk] === ""
+    ) {
+      return err(
+        req,
+        400,
+        `Falta el campo obligatorio "${table.pk}".`,
+        {
+          table: name,
+          primaryKey: table.pk,
+          received: row
+        }
+      );
+    }
+
+    const columns = table.columns.filter(
+      column =>
+        Object.prototype.hasOwnProperty.call(
+          row,
+          column
+        )
+    );
+
+    if (!columns.length) {
+      continue;
+    }
+
+    const updateColumns = columns.filter(
+      column => column !== table.pk
+    );
+
+    let sql = `
+      INSERT INTO ${name}
+      (${columns.join(",")})
+      VALUES (${columns.map(() => "?").join(",")})
+    `;
+
+    if (updateColumns.length) {
+      sql += `
+        ON CONFLICT(${table.pk})
+        DO UPDATE SET
+        ${updateColumns
+          .map(
+            column =>
+              `${column}=excluded.${column}`
+          )
+          .join(",")}
+      `;
+    }
+
+    statements.push(
+      env.DB
+        .prepare(sql)
+        .bind(
+          ...columns.map(
+            column =>
+              encode(column, row[column])
+          )
+        )
+    );
+  }
+
+  if (!statements.length) {
+    return err(
+      req,
+      400,
+      "No hay columnas válidas para guardar.",
+      {
+        table: name,
+        columns: table.columns
+      }
+    );
+  }
+
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    console.error(
+      "D1 POST ERROR:",
+      name,
+      error
+    );
+
+    return err(
+      req,
+      500,
+      "D1 rechazó el guardado.",
+      {
+        table: name,
+        message:
+          error?.message ||
+          String(error)
+      }
+    );
+  }
+
+  const result = [];
+
+  for (const row of rows) {
+    try {
+      const saved = await env.DB
+        .prepare(
+          `SELECT ${table.columns.join(",")}
+           FROM ${name}
+           WHERE ${table.pk} = ?`
+        )
+        .bind(row[table.pk])
+        .first();
+
+      if (saved) {
+        result.push(decode(saved));
+      }
+    } catch (error) {
+      console.error(
+        "D1 READ AFTER POST ERROR:",
+        name,
+        error
+      );
+
+      return err(
+        req,
+        500,
+        "El registro se guardó, pero no pudo recuperarse.",
+        {
+          table: name,
+          message:
+            error?.message ||
+            String(error)
+        }
+      );
+    }
+  }
+
+  return out(req, result, 200);
+}
+
+async function del(
+  req,
+  env,
+  name,
+  table,
+  url
+) {
+  const fs = filters(url, table);
+
+  if (!fs.length) {
+    return err(
+      req,
+      400,
+      "DELETE requiere al menos un filtro."
+    );
+  }
+
+  const where = [];
+  const bindings = [];
+
+  for (const filter of fs) {
+    if (filter.op === "IN") {
+      where.push(
+        `${filter.k} IN (${filter.vs
+          .map(() => "?")
+          .join(",")})`
+      );
+
+      bindings.push(...filter.vs);
+    }
+
+    else if (filter.op.includes("NULL")) {
+      where.push(
+        `${filter.k} ${filter.op}`
+      );
+    }
+
+    else {
+      where.push(`${filter.k} = ?`);
+      bindings.push(filter.v);
+    }
+  }
+
+  try {
+    await env.DB
+      .prepare(
+        `DELETE FROM ${name}
+         WHERE ${where.join(" AND ")}`
+      )
+      .bind(...bindings)
+      .run();
+
+    return out(req, null, 204);
+  } catch (error) {
+    console.error(
+      "D1 DELETE ERROR:",
+      name,
+      error
+    );
+
+    return err(
+      req,
+      500,
+      "D1 rechazó la eliminación.",
+      {
+        table: name,
+        message:
+          error?.message ||
+          String(error)
+      }
+    );
+  }
+}
+
+export default {
+  async fetch(req, env) {
+
+    /*
+     * CORS
+     */
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: cors(req)
+      });
+    }
+
+    const url = new URL(req.url);
+
+    /*
+     * Health check
+     */
+    if (url.pathname === "/health") {
+      return out(req, {
+        ok: true,
+        service: "guarderia-api",
+        database: "D1"
+      });
+    }
+
+    /*
+     * Detectar tabla
+     */
+    const tableName = tableFrom(
+      url.pathname
+    );
+
+    const table = TABLES[tableName];
+
+    if (!table) {
+      return err(
+        req,
+        404,
+        "Ruta no encontrada."
+      );
+    }
+
+    try {
+
+      if (req.method === "GET") {
+        return await get(
+          req,
+          env,
+          tableName,
+          table,
+          url
+        );
+      }
+
+      if (req.method === "POST") {
+        return await post(
+          req,
+          env,
+          tableName,
+          table
+        );
+      }
+
+      if (req.method === "DELETE") {
+        return await del(
+          req,
+          env,
+          tableName,
+          table,
+          url
+        );
+      }
+
+      return err(
+        req,
+        405,
+        "Método no permitido."
+      );
+
+    } catch (error) {
+
+      console.error(
+        "WORKER ERROR:",
+        error
+      );
+
+      return err(
+        req,
+        500,
+        "Error interno del servidor.",
+        {
+          message:
+            error?.message ||
+            String(error)
+        }
+      );
+    }
+  }
 };
