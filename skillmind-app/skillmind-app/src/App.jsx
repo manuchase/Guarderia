@@ -86,10 +86,11 @@ const NAP_DURATIONS = [
   { key: "mas60", label: "Más de una hora" },
 ];
 
-/* ============================ Supabase storage ============================ */
+/* ============================ Cloudflare Worker + D1 ============================ */
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// API de Cloudflare que sustituye completamente a Supabase.
+// Puedes sobrescribirla en Netlify con VITE_API_URL si en el futuro cambias de dominio.
+const API_URL = (import.meta.env.VITE_API_URL || "https://guarderia-api.manueeyala.workers.dev").replace(/\/$/, "");
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -97,10 +98,9 @@ async function sb(path, options = {}, attempts = 3) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      const res = await fetch(`${API_URL}/rest/v1/${path}`, {
         ...options,
         headers: {
-          apikey: SUPABASE_KEY,
           "Content-Type": "application/json",
           Prefer: options.prefer || "return=representation",
           ...(options.headers || {}),
@@ -108,7 +108,7 @@ async function sb(path, options = {}, attempts = 3) {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(`Supabase ${res.status}: ${text.slice(0, 200)}`);
+        throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
       }
       const text = await res.text();
       return text ? JSON.parse(text) : null;
@@ -118,7 +118,7 @@ async function sb(path, options = {}, attempts = 3) {
     }
   }
   if (lastErr?.name === "TypeError" || lastErr?.message === "Failed to fetch") {
-    throw new Error("No se pudo conectar con Supabase. Revisa que el proyecto esté activo y que la URL de Supabase sea correcta.");
+    throw new Error("No se pudo conectar con el servidor. Verifica la conexión y que el servicio esté disponible.");
   }
   throw lastErr;
 }
@@ -173,19 +173,97 @@ async function deleteNino(id) {
 }
 
 /* ---- bitacoras ---- */
-async function getLog(ninoId, date) {
-  try {
-    const id = `${ninoId}:${date}`;
-    const rows = await sb(`bitacoras?id=eq.${encodeURIComponent(id)}`);
-    return rows && rows[0] ? rowToLog(rows[0]) : null;
-  } catch { return null; }
+// Cache de bitácoras en memoria: evita repetir lecturas durante la misma sesión.
+// La clave es ninoId:fecha y se invalida/actualiza automáticamente al guardar.
+const logCache = new Map();
+const logBatchInflight = new Map();
+
+function logCacheKey(ninoId, date) { return `${ninoId}:${date}`; }
+
+function cacheLogs(logs) {
+  for (const log of logs || []) {
+    if (log?.ninoId && log?.date) logCache.set(logCacheKey(log.ninoId, log.date), log);
+  }
+  return logs || [];
 }
+
+async function getLogsForNinos(ninoIds, date) {
+  const ids = [...new Set((ninoIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+
+  const missing = ids.filter((id) => !logCache.has(logCacheKey(id, date)));
+  if (missing.length) {
+    const requestKey = `${date}|${[...missing].sort().join(',')}`;
+    if (!logBatchInflight.has(requestKey)) {
+      const list = missing.map((id) => `"${String(id).replace(/"/g, '\"')}"`).join(',');
+      const promise = (async () => {
+        try {
+          const rows = await sb(`bitacoras?nino_id=in.(${list})&date=eq.${encodeURIComponent(date)}&order=nino_id`);
+          cacheLogs((rows || []).map(rowToLog));
+        } catch {}
+        finally { logBatchInflight.delete(requestKey); }
+      })();
+      logBatchInflight.set(requestKey, promise);
+    }
+    await logBatchInflight.get(requestKey);
+  }
+
+  return ids.map((id) => logCache.get(logCacheKey(id, date)) || null);
+}
+
+async function getLogsForNinosDateRange(ninoIds, startDate, endDate) {
+  const ids = [...new Set((ninoIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+  const list = ids.map((id) => `"${String(id).replace(/"/g, '\"')}"`).join(',');
+  const cacheReady = [];
+  const missingIds = [];
+  for (const id of ids) {
+    let complete = true;
+    for (let d = new Date(startDate + 'T12:00:00'); dateKey(d) <= endDate; d = addDays(d, 1)) {
+      if (!logCache.has(logCacheKey(id, dateKey(d)))) { complete = false; break; }
+    }
+    if (!complete) missingIds.push(id);
+  }
+  if (missingIds.length) {
+    const missingList = missingIds.map((id) => `"${String(id).replace(/"/g, '\"')}"`).join(',');
+    try {
+      const rows = await sb(`bitacoras?nino_id=in.(${missingList})&date=gte.${encodeURIComponent(startDate)}&date=lte.${encodeURIComponent(endDate)}&order=date.asc`);
+      cacheLogs((rows || []).map(rowToLog));
+    } catch {}
+  }
+  for (const id of ids) {
+    for (let d = new Date(startDate + 'T12:00:00'); dateKey(d) <= endDate; d = addDays(d, 1)) {
+      const key = logCacheKey(id, dateKey(d));
+      if (logCache.has(key)) cacheReady.push(logCache.get(key));
+    }
+  }
+  return cacheReady;
+}
+
+async function getLog(ninoId, date) {
+  const cached = logCache.get(logCacheKey(ninoId, date));
+  if (cached !== undefined) return cached;
+  const logs = await getLogsForNinos([ninoId], date);
+  return logs[0] || null;
+}
+
 function emptyLog(nino, date) {
   return { ninoId: nino.id, ninoName: nino.name, grupo: nino.grupo, date, professionalId: nino.professionalId, alimentacion: [], panales: [], siestas: [], animos: [], notas: [] };
 }
+
 async function saveLog(log) {
-  await sb("bitacoras", { method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: JSON.stringify([logToRow(log)]) });
+  const result = await sb("bitacoras", { method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: JSON.stringify([logToRow(log)]) });
+  logCache.set(logCacheKey(log.ninoId, log.date), log);
+  return result;
 }
+
+async function saveLogsBatch(logs) {
+  if (!logs?.length) return [];
+  const result = await sb("bitacoras", { method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: JSON.stringify(logs.map(logToRow)) });
+  cacheLogs(logs);
+  return result;
+}
+
 async function listNinoIdsWithLogOn(profId, date) {
   try {
     const rows = await sb(`bitacoras?professional_id=eq.${encodeURIComponent(profId)}&date=eq.${encodeURIComponent(date)}&select=nino_id`);
@@ -1637,7 +1715,7 @@ function DayNav({ date, setDate }) {
 
 /* ------------------------------ Nino log widget ----------------------------- */
 
-function NinoLogWidget({ nino, date, showToast, readOnly }) {
+function NinoLogWidget({ nino, date, showToast, readOnly, initialLog = undefined }) {
   const [log, setLog] = useState(null);
   const [expanded, setExpanded] = useState(false);
   const [noteText, setNoteText] = useState("");
@@ -1645,9 +1723,13 @@ function NinoLogWidget({ nino, date, showToast, readOnly }) {
 
   useEffect(() => {
     let alive = true;
+    if (initialLog !== undefined) {
+      setLog(initialLog || emptyLog(nino, date));
+      return () => { alive = false; };
+    }
     getLog(nino.id, date).then((l) => { if (alive) setLog(l || emptyLog(nino, date)); });
     return () => { alive = false; };
-  }, [nino.id, date]);
+  }, [nino.id, date, initialLog]);
 
   async function persist(updated) {
     setLog(updated);
@@ -1870,16 +1952,15 @@ function printBitacoraReport(maestra, dateStr, entries) {
 }
 
 async function printAllBitacoras(maestras, ninos, dateStr) {
-  const sections = [];
-  for (const m of maestras) {
+  const logs = await getLogsForNinos(ninos.map((n) => n.id), dateStr);
+  const logMap = new Map(logs.filter(Boolean).map((l) => [l.ninoId, l]));
+  const sections = maestras.map((m) => {
     const grupoNinos = ninos.filter((n) => n.grupo === m.grupo);
-    const entries = [];
-    for (const n of grupoNinos) {
-      const log = await getLog(n.id, dateStr);
-      entries.push({ nino: n, log: log || emptyLog(n, dateStr) });
-    }
-    sections.push({ maestra: m, entries });
-  }
+    return {
+      maestra: m,
+      entries: grupoNinos.map((n) => ({ nino: n, log: logMap.get(n.id) || emptyLog(n, dateStr) }))
+    };
+  });
   printHTMLReport(buildAllBitacorasHTML(dateStr, sections), "Bitácoras diarias");
 }
 
@@ -1892,11 +1973,9 @@ function MaestraAccordionRow({ m, ninos, copyLink, linkUrl, onPreview, showToast
   async function download() {
     setDownloading(true);
     try {
-      const entries = [];
-      for (const n of grupoNinos) {
-        const log = await getLog(n.id, date);
-        entries.push({ nino: n, log: log || emptyLog(n, date) });
-      }
+      const logs = await getLogsForNinos(grupoNinos.map((n) => n.id), date);
+      const logMap = new Map(logs.filter(Boolean).map((l) => [l.ninoId, l]));
+      const entries = grupoNinos.map((n) => ({ nino: n, log: logMap.get(n.id) || emptyLog(n, date) }));
       printBitacoraReport(m, date, entries);
     } catch { showToast("No se pudo generar la bitácora"); }
     setDownloading(false);
@@ -2291,6 +2370,7 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [modo, setModo] = useState("bitacoras"); // "bitacoras" | "plan"
   const [ninoPlan, setNinoPlan] = useState(null);
+  const [dayLogs, setDayLogs] = useState({});
 
   useEffect(() => {
     (async () => {
@@ -2299,29 +2379,52 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
       if (m) {
         if (persist) safeStorageSet("skillmind-my-access", JSON.stringify({ type: "maestra", code }));
         const all = await listNinos(m.professionalId);
-        setNinos(all.filter((n) => n.grupo === m.grupo && n.activo !== false).sort((a, b) => a.name.localeCompare(b.name)));
+        const grupo = all.filter((n) => n.grupo === m.grupo && n.activo !== false).sort((a, b) => a.name.localeCompare(b.name));
+        setNinos(grupo);
       }
       setLoading(false);
     })();
   }, [code, persist]);
 
+  useEffect(() => {
+    let alive = true;
+    if (!ninos.length) { setDayLogs({}); return () => { alive = false; }; }
+    getLogsForNinos(ninos.map((n) => n.id), date).then((logs) => {
+      if (!alive) return;
+      const map = {};
+      ninos.forEach((n, i) => { if (logs[i]) map[n.id] = logs[i]; });
+      setDayLogs(map);
+    });
+    return () => { alive = false; };
+  }, [ninos, date]);
+
   async function bulkMeal(cantidad) {
     setBulkBusy(true);
-    for (const n of ninos) {
-      const log = (await getLog(n.id, date)) || emptyLog(n, date);
-      await saveLog({ ...log, alimentacion: [...log.alimentacion, { time: Date.now(), cantidad }] });
-    }
+    try {
+      const logs = await getLogsForNinos(ninos.map((n) => n.id), date);
+      const byId = new Map(logs.filter(Boolean).map((l) => [l.ninoId, l]));
+      const updated = ninos.map((n) => {
+        const log = byId.get(n.id) || emptyLog(n, date);
+        return { ...log, alimentacion: [...log.alimentacion, { time: Date.now(), cantidad }] };
+      });
+      await saveLogsBatch(updated);
+      showToast("Registrado para todo el grupo");
+    } catch { showToast("No se pudo guardar para todo el grupo"); }
     setBulkBusy(false);
-    showToast("Registrado para todo el grupo");
   }
   async function bulkNap(durmio, duracion) {
     setBulkBusy(true);
-    for (const n of ninos) {
-      const log = (await getLog(n.id, date)) || emptyLog(n, date);
-      await saveLog({ ...log, siestas: [...log.siestas, { time: Date.now(), durmio, ...(durmio === "si" ? { duracion } : {}) }] });
-    }
+    try {
+      const logs = await getLogsForNinos(ninos.map((n) => n.id), date);
+      const byId = new Map(logs.filter(Boolean).map((l) => [l.ninoId, l]));
+      const updated = ninos.map((n) => {
+        const log = byId.get(n.id) || emptyLog(n, date);
+        return { ...log, siestas: [...log.siestas, { time: Date.now(), durmio, ...(durmio === "si" ? { duracion } : {}) }] };
+      });
+      await saveLogsBatch(updated);
+      showToast("Registrado para todo el grupo");
+    } catch { showToast("No se pudo guardar para todo el grupo"); }
     setBulkBusy(false);
-    showToast("Registrado para todo el grupo");
   }
 
   if (loading) return <div className="flex-1 flex items-center justify-center py-24 min-h-screen"><Loader2 className="animate-spin" color="#4A9483" /></div>;
@@ -2385,7 +2488,7 @@ function MaestraHub({ code, onExitDemo, showToast, persist = true }) {
 
           <div className="space-y-2">
             {ninos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>No hay niños registrados en tu grupo todavía.</p></GlassCard>}
-            {ninos.map((n) => <NinoLogWidget key={n.id} nino={n} date={date} showToast={showToast} />)}
+            {ninos.map((n) => <NinoLogWidget key={n.id} nino={n} date={date} showToast={showToast} initialLog={dayLogs[n.id]} />)}
           </div>
         </>
       ) : (
@@ -2445,20 +2548,25 @@ function PadreBottomNav({ tab, setTab }) {
   );
 }
 
-function WeeklySummaryCard({ nino }) {
+function WeeklySummaryCard({ nino, logsOverride = null }) {
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState([]);
 
   useEffect(() => {
+    if (logsOverride !== null) {
+      setLogs(logsOverride || []);
+      setLoading(false);
+      return;
+    }
     (async () => {
       setLoading(true);
-      const days = [];
-      for (let i = 6; i >= 0; i--) days.push(dateKey(addDays(new Date(), -i)));
-      const results = await Promise.all(days.map((d) => getLog(nino.id, d)));
+      const end = dateKey(new Date());
+      const start = dateKey(addDays(new Date(), -6));
+      const results = await getLogsForNinosDateRange([nino.id], start, end);
       setLogs(results.filter(Boolean));
       setLoading(false);
     })();
-  }, [nino.id]);
+  }, [nino.id, logsOverride]);
 
   if (loading) return <GlassCard className="p-5"><p className="text-sm" style={{ color: "#7A8A85" }}>Cargando…</p></GlassCard>;
 
@@ -2500,6 +2608,33 @@ function WeeklySummaryCard({ nino }) {
 function PadreInicioTab({ hijos }) {
   const [date, setDate] = useState(dateKey(new Date()));
   const [view, setView] = useState("dia"); // "dia" | "semana"
+  const [dayLogs, setDayLogs] = useState({});
+  const [weekLogs, setWeekLogs] = useState({});
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const ids = hijos.map((n) => n.id);
+      if (!ids.length) { setDayLogs({}); setWeekLogs({}); return; }
+      const dayResults = await getLogsForNinos(ids, date);
+      const dayMap = {};
+      ids.forEach((id, i) => { if (dayResults[i]) dayMap[id] = dayResults[i]; });
+      if (alive) setDayLogs(dayMap);
+
+      if (view === "semana") {
+        const start = dateKey(addDays(new Date(), -6));
+        const end = dateKey(new Date());
+        const weekResults = await getLogsForNinosDateRange(ids, start, end);
+        const weekMap = {};
+        for (const log of weekResults) {
+          if (!weekMap[log.ninoId]) weekMap[log.ninoId] = [];
+          weekMap[log.ninoId].push(log);
+        }
+        if (alive) setWeekLogs(weekMap);
+      }
+    })();
+    return () => { alive = false; };
+  }, [hijos, date, view]);
 
   return (
     <div className="space-y-3">
@@ -2518,12 +2653,12 @@ function PadreInicioTab({ hijos }) {
         <>
           <GlassCard className="p-4"><DayNav date={date} setDate={setDate} /></GlassCard>
           {hijos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>Aún no hay niños vinculados a tu cuenta.</p></GlassCard>}
-          {hijos.map((n) => <NinoLogWidget key={n.id} nino={n} date={date} readOnly />)}
+          {hijos.map((n) => <NinoLogWidget key={n.id} nino={n} date={date} readOnly initialLog={dayLogs[n.id]} />)}
         </>
       ) : (
         <>
           {hijos.length === 0 && <GlassCard className="p-6"><p className="text-sm text-center" style={{ color: "#7A8A85" }}>Aún no hay niños vinculados a tu cuenta.</p></GlassCard>}
-          {hijos.map((n) => <WeeklySummaryCard key={n.id} nino={n} />)}
+          {hijos.map((n) => <WeeklySummaryCard key={n.id} nino={n} logsOverride={weekLogs[n.id] || []} />)}
         </>
       )}
     </div>
