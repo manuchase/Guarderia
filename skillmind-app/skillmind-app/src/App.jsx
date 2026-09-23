@@ -129,18 +129,12 @@ async function sb(
       ).toUpperCase();
 
       const headers = {
-        Prefer:
-          options.prefer ||
-          "return=representation",
-
         ...(options.headers || {})
       };
 
       /*
-       * IMPORTANTE:
-       * Content-Type solamente para POST.
-       *
-       * Esto evita que los GET generen
+       * Content-Type y Prefer solamente para POST.
+       * Esto evita que los GET/DELETE generen
        * preflight CORS innecesariamente.
        */
       if (
@@ -149,6 +143,9 @@ async function sb(
         headers[
           "Content-Type"
         ] = "application/json";
+        headers[
+          "Prefer"
+        ] = options.prefer || "return=representation";
       }
 
       const res =
