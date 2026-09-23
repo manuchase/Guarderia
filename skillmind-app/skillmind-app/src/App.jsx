@@ -91,7 +91,7 @@ const NAP_DURATIONS = [
 // API de Cloudflare que sustituye completamente a Supabase.
 const API_URL = (
   import.meta.env.VITE_API_URL ||
-  "https://guarderia-api.manuueeyala.workers.dev"
+  "https://guarderia-api.manuueelyala.workers.dev"
 ).replace(/\/$/, "");
 
 function wait(ms) {
